@@ -1,0 +1,9 @@
+packages:
+  - apps/web
+
+# Supply-chain security
+minimumReleaseAge: 10080      # 7-day quarantine for newly published versions
+blockExoticSubdeps: true      # Block deps from git/tarballs/etc.
+
+# Allowed builds (whitelist — fill in according to project deps)
+allowBuilds: {}
