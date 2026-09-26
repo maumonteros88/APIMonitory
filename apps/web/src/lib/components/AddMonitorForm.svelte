@@ -56,7 +56,7 @@
 	{/if}
 
 	<div class="form-actions">
-		<button type="button" onclick={onCancel}>Cancelar</button>
+		<button type="button" class="ghost" onclick={onCancel}>Cancelar</button>
 		<button type="submit" class="primary" disabled={submitting}>Guardar API</button>
 	</div>
 </form>
@@ -86,6 +86,12 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
+		border: 0;
+		background: none;
+		padding: 4px;
+		color: var(--fg-2);
+		font-size: 20px;
+		cursor: pointer;
 	}
 
 	label {
@@ -99,12 +105,34 @@
 	input,
 	textarea {
 		font: inherit;
+		font-size: 16px;
 		font-weight: 400;
-		padding: 10px 12px;
+		height: 44px;
+		padding: 0 12px;
 		border: 1px solid var(--border-default);
-		border-radius: 6px;
+		border-radius: 4px;
 		background: var(--bg-app);
 		color: var(--fg-1);
+		outline: none;
+	}
+
+	textarea {
+		height: auto;
+		padding: 10px 12px;
+		resize: vertical;
+	}
+
+	input:focus,
+	textarea:focus {
+		border: 2px solid var(--primary-500);
+	}
+
+	input:focus {
+		padding: 0 11px;
+	}
+
+	textarea:focus {
+		padding: 9px 11px;
 	}
 
 	.form-error {
@@ -119,11 +147,31 @@
 	.form-actions {
 		display: flex;
 		justify-content: flex-end;
-		gap: 12px;
+		gap: 8px;
+	}
+
+	.form-actions button {
+		height: 40px;
+		padding: 0 16px;
+		border: 0;
+		border-radius: 4px;
+		font-size: 14px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.ghost {
+		background: none;
+		color: var(--m-ink);
 	}
 
 	.primary {
+		padding: 0 20px;
 		background: var(--primary-500);
 		color: #fff;
+	}
+
+	.primary:hover {
+		background: var(--primary-700);
 	}
 </style>

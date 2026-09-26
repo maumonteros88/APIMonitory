@@ -57,11 +57,11 @@
 	</div>
 
 	<div class="monitor-actions">
-		<button type="button" onclick={() => onCheck(monitor.id)}>
+		<button type="button" class="check-action" onclick={() => onCheck(monitor.id)}>
 			<Icon name="refresh-line" size={16} />
 			Verificar ahora
 		</button>
-		<button type="button" onclick={handleDelete}>
+		<button type="button" class="delete-action" onclick={handleDelete}>
 			<Icon name="delete-bin-line" size={16} />
 			Eliminar
 		</button>
@@ -151,6 +151,28 @@
 	.monitor-actions button {
 		display: inline-flex;
 		align-items: center;
-		gap: 6px;
+		gap: 4px;
+		border: 0;
+		background: none;
+		padding: 0;
+		font-weight: 600;
+		font-size: inherit;
+		cursor: pointer;
+	}
+
+	.check-action {
+		color: var(--m-ink);
+	}
+
+	.check-action:hover {
+		color: var(--primary-700);
+	}
+
+	.delete-action {
+		color: var(--fg-2);
+	}
+
+	.delete-action:hover {
+		color: var(--danger-500);
 	}
 </style>

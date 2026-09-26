@@ -81,12 +81,20 @@
 
 	input {
 		font: inherit;
+		font-size: 16px;
 		font-weight: 400;
-		padding: 10px 12px;
+		height: 44px;
+		padding: 0 12px;
 		border: 1px solid var(--border-default);
-		border-radius: 6px;
+		border-radius: 4px;
 		background: var(--bg-app);
 		color: var(--fg-1);
+		outline: none;
+	}
+
+	input:focus {
+		border: 2px solid var(--primary-500);
+		padding: 0 11px;
 	}
 
 	.gate-error {
@@ -96,7 +104,18 @@
 	}
 
 	.primary {
+		height: 40px;
+		padding: 0 16px;
+		border: 0;
+		border-radius: 4px;
+		font-size: 14px;
+		font-weight: 700;
+		cursor: pointer;
 		background: var(--primary-500);
 		color: #fff;
+	}
+
+	.primary:hover {
+		background: var(--primary-700);
 	}
 </style>

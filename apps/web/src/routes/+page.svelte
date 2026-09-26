@@ -303,12 +303,30 @@
 	.actions button {
 		display: inline-flex;
 		align-items: center;
-		gap: 6px;
+		gap: 8px;
+		height: 40px;
+		padding: 0 16px;
+		border: 1px solid var(--m-ink);
+		border-radius: 4px;
+		background: var(--m-surface);
+		color: var(--m-ink);
+		font-size: 14px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.actions button:hover {
+		background: var(--m-soft);
 	}
 
 	.primary {
+		border: 0;
 		background: var(--primary-500);
 		color: #fff;
+	}
+
+	.primary:hover {
+		background: var(--primary-700);
 	}
 
 	.connection-banner {

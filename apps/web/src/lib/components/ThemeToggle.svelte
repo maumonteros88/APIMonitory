@@ -13,5 +13,18 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
+		width: 40px;
+		height: 40px;
+		padding: 0;
+		border: 1px solid var(--border-default);
+		border-radius: 4px;
+		background: var(--m-surface);
+		color: var(--m-ink);
+		font-size: 18px;
+		cursor: pointer;
+	}
+
+	.icon-button:hover {
+		background: var(--m-soft);
 	}
 </style>
