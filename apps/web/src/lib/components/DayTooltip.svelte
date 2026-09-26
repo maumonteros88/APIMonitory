@@ -18,7 +18,7 @@
 	$effect(() => {
 		void day;
 		const el = tooltipEl;
-		if (!el) return;
+		if (!el || typeof window === 'undefined') return;
 		const width = el.offsetWidth;
 		const height = el.offsetHeight;
 
