@@ -85,8 +85,6 @@
 
 	.monitor-info h3 {
 		margin: 0;
-		font-size: 16px;
-		font-weight: 700;
 	}
 
 	.monitor-desc {
