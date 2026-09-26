@@ -27,9 +27,15 @@ func main() {
 	// Registered first so it runs last, after every other cleanup defer
 	// below: os.Exit skips deferred calls, so anything that needs to run
 	// on a fatal path (closing the store, canceling appCtx) must be
-	// deferred before this one and only the exit code set here.
+	// deferred before this one and only the exit code set here. Guarded
+	// on exitCode != 0 so an unrelated panic unwinds normally (stack
+	// trace, exit code 2) instead of being swallowed as a clean exit 0.
 	var exitCode int
-	defer func() { os.Exit(exitCode) }()
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
 
 	cfg, err := config.Load()
 	if err != nil {
