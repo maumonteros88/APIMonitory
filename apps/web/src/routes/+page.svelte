@@ -231,13 +231,13 @@
 		<section class="monitor-list-section">
 			<div class="list-caption">Disponibilidad de los últimos 90 días</div>
 			<div class="monitor-list">
-				{#if !hasLoadedOnce}
+				{#if !hasLoadedOnce && connectionError}
 					<div class="empty-state">
 						<Icon name="pulse-line" size={32} />
 						<p class="empty-title">No se pudo conectar con el servidor</p>
 						<p class="empty-sub">Reintentando automáticamente…</p>
 					</div>
-				{:else if monitors.length === 0}
+				{:else if hasLoadedOnce && monitors.length === 0}
 					<div class="empty-state">
 						<Icon name="pulse-line" size={32} />
 						<p class="empty-title">No hay APIs para monitorear</p>
@@ -245,7 +245,7 @@
 							Agrega la URL de health de una API para empezar a ver su estado.
 						</p>
 					</div>
-				{:else}
+				{:else if hasLoadedOnce}
 					{#each monitors as monitor (monitor.id)}
 						<MonitorCard {monitor} onCheck={handleCheck} onDelete={handleDelete} />
 					{/each}
