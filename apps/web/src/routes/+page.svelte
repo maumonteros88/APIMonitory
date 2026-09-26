@@ -13,6 +13,7 @@
 		type NewMonitorInput
 	} from '$lib/api';
 	import { getToken, setToken } from '$lib/auth';
+	import { ago } from '$lib/format';
 	import AddMonitorForm from '$lib/components/AddMonitorForm.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import MonitorCard from '$lib/components/MonitorCard.svelte';
@@ -29,6 +30,25 @@
 
 	let monitors = $state<Monitor[]>([]);
 	let intervalSeconds = $state(60);
+	let hasLoadedOnce = $state(false);
+	let lastSuccessAt = $state<number | null>(null);
+	let lastFailureAt = $state<number | null>(null);
+
+	// A poll failure only matters if it's the most recent attempt: a
+	// success after a failure clears it without needing to reset
+	// lastFailureAt itself.
+	const connectionError = $derived(
+		lastFailureAt !== null && (lastSuccessAt === null || lastFailureAt > lastSuccessAt)
+	);
+
+	const connectionSub = $derived.by(() => {
+		// Read lastFailureAt so this recomputes on every failed poll tick
+		// (every POLL_MS), keeping the "hace X" wording fresh even though
+		// lastSuccessAt itself doesn't change while the outage continues.
+		void lastFailureAt;
+		if (!hasLoadedOnce || lastSuccessAt === null) return 'No se pudo conectar con el servidor';
+		return `Mostrando datos de ${ago(new Date(lastSuccessAt).toISOString())}`;
+	});
 
 	let formOpen = $state(false);
 	let formError = $state<string | null>(null);
@@ -57,8 +77,12 @@
 			const res = await fetchMonitors(90);
 			monitors = res.monitors;
 			intervalSeconds = res.intervalSeconds;
+			hasLoadedOnce = true;
+			lastSuccessAt = Date.now();
 		} catch (err) {
-			if (!(err instanceof UnauthorizedError)) console.error('failed to load monitors', err);
+			if (err instanceof UnauthorizedError) return;
+			console.error('failed to load monitors', err);
+			lastFailureAt = Date.now();
 		}
 	}
 
@@ -92,6 +116,9 @@
 		stopPolling();
 		authenticated = false;
 		monitors = [];
+		hasLoadedOnce = false;
+		lastSuccessAt = null;
+		lastFailureAt = null;
 	}
 
 	async function handleCreate(input: NewMonitorInput) {
@@ -178,7 +205,19 @@
 			</div>
 		</header>
 
-		<StatusBanner {monitors} {intervalSeconds} />
+		{#if connectionError}
+			<div class="connection-banner">
+				<Icon name="error-warning-line" />
+				<div class="connection-copy">
+					<span class="connection-text">No se pudo actualizar el estado</span>
+					<span class="connection-sub">{connectionSub}</span>
+				</div>
+			</div>
+		{/if}
+
+		{#if hasLoadedOnce}
+			<StatusBanner {monitors} {intervalSeconds} />
+		{/if}
 
 		{#if formOpen}
 			<AddMonitorForm
@@ -192,7 +231,13 @@
 		<section class="monitor-list-section">
 			<div class="list-caption">Disponibilidad de los últimos 90 días</div>
 			<div class="monitor-list">
-				{#if monitors.length === 0}
+				{#if !hasLoadedOnce}
+					<div class="empty-state">
+						<Icon name="pulse-line" size={32} />
+						<p class="empty-title">No se pudo conectar con el servidor</p>
+						<p class="empty-sub">Reintentando automáticamente…</p>
+					</div>
+				{:else if monitors.length === 0}
 					<div class="empty-state">
 						<Icon name="pulse-line" size={32} />
 						<p class="empty-title">No hay APIs para monitorear</p>
@@ -264,6 +309,37 @@
 	.primary {
 		background: var(--primary-500);
 		color: #fff;
+	}
+
+	.connection-banner {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 12px 20px;
+		border-radius: 8px;
+		background: var(--m-warn-bg);
+		border: 1px solid var(--m-warn-bd);
+	}
+
+	.connection-banner :global(svg) {
+		color: #e0a800;
+		flex-shrink: 0;
+	}
+
+	.connection-copy {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.connection-text {
+		font-size: 14px;
+		font-weight: 700;
+	}
+
+	.connection-sub {
+		font-size: 12px;
+		color: var(--fg-2);
 	}
 
 	.list-caption {
