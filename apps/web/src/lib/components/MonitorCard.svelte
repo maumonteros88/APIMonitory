@@ -7,10 +7,12 @@
 	let {
 		monitor,
 		onCheck,
+		onEdit,
 		onDelete
 	}: {
 		monitor: Monitor;
 		onCheck: (id: string) => void;
+		onEdit: (monitor: Monitor) => void;
 		onDelete: (id: string) => void;
 	} = $props();
 
@@ -60,6 +62,10 @@
 		<button type="button" class="check-action" onclick={() => onCheck(monitor.id)}>
 			<Icon name="refresh-line" size={16} />
 			Verificar ahora
+		</button>
+		<button type="button" class="check-action" onclick={() => onEdit(monitor)}>
+			<Icon name="edit-line" size={16} />
+			Editar
 		</button>
 		<button type="button" class="delete-action" onclick={handleDelete}>
 			<Icon name="delete-bin-line" size={16} />

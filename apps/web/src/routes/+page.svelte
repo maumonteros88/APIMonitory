@@ -9,6 +9,7 @@
 		fetchMonitors,
 		onUnauthorized,
 		probeToken,
+		updateMonitor,
 		type Monitor,
 		type NewMonitorInput
 	} from '$lib/api';
@@ -56,6 +57,7 @@
 	let formOpen = $state(false);
 	let formError = $state<string | null>(null);
 	let formSubmitting = $state(false);
+	let editingMonitor = $state<Monitor | null>(null);
 
 	let theme = $state<'light' | 'dark'>('light');
 	let view = $state<'list' | 'board'>('list');
@@ -134,19 +136,47 @@
 		lastFailureAt = null;
 	}
 
-	async function handleCreate(input: NewMonitorInput) {
+	function closeForm() {
+		formOpen = false;
+		editingMonitor = null;
+		formError = null;
+	}
+
+	function toggleCreateForm() {
+		if (formOpen || editingMonitor) {
+			closeForm();
+		} else {
+			formOpen = true;
+		}
+	}
+
+	function handleEdit(monitor: Monitor) {
+		formOpen = false;
+		formError = null;
+		editingMonitor = monitor;
+	}
+
+	async function handleFormSubmit(input: NewMonitorInput) {
 		formSubmitting = true;
 		formError = null;
 		try {
-			const created = await createMonitor(input);
-			// Never blindly append: a concurrent poll that resolves around the
-			// same time can already include this monitor (the server created it
-			// before either request finished), and appending it again would
-			// leave two entries with the same id, crashing the keyed each-block.
-			monitors = monitors.some((m) => m.id === created.id)
-				? monitors.map((m) => (m.id === created.id ? created : m))
-				: [...monitors, created];
-			formOpen = false;
+			if (editingMonitor) {
+				const updated = await updateMonitor(editingMonitor.id, {
+					name: input.name,
+					description: input.description
+				});
+				monitors = monitors.map((m) => (m.id === updated.id ? updated : m));
+			} else {
+				const created = await createMonitor(input);
+				// Never blindly append: a concurrent poll that resolves around the
+				// same time can already include this monitor (the server created it
+				// before either request finished), and appending it again would
+				// leave two entries with the same id, crashing the keyed each-block.
+				monitors = monitors.some((m) => m.id === created.id)
+					? monitors.map((m) => (m.id === created.id ? created : m))
+					: [...monitors, created];
+			}
+			closeForm();
 		} catch (err) {
 			formError = err instanceof Error ? err.message : 'Ocurrió un error inesperado';
 		} finally {
@@ -243,7 +273,7 @@
 					<Icon name="refresh-line" />
 					Verificar todas
 				</button>
-				<button type="button" class="primary" onclick={() => (formOpen = !formOpen)}>
+				<button type="button" class="primary" onclick={toggleCreateForm}>
 					<Icon name="add-line" />
 					Agregar API
 				</button>
@@ -264,13 +294,16 @@
 			<StatusBanner {monitors} {intervalSeconds} />
 		{/if}
 
-		{#if formOpen}
-			<AddMonitorForm
-				error={formError}
-				submitting={formSubmitting}
-				onCancel={() => (formOpen = false)}
-				onSubmit={handleCreate}
-			/>
+		{#if formOpen || editingMonitor}
+			{#key editingMonitor?.id ?? 'new'}
+				<AddMonitorForm
+					{editingMonitor}
+					error={formError}
+					submitting={formSubmitting}
+					onCancel={closeForm}
+					onSubmit={handleFormSubmit}
+				/>
+			{/key}
 		{/if}
 
 		{#if !hasLoadedOnce && connectionError}
@@ -300,7 +333,7 @@
 						</div>
 					{:else}
 						{#each monitors as monitor (monitor.id)}
-							<MonitorCard {monitor} onCheck={handleCheck} onDelete={handleDelete} />
+							<MonitorCard {monitor} onCheck={handleCheck} onEdit={handleEdit} onDelete={handleDelete} />
 						{/each}
 					{/if}
 				</div>

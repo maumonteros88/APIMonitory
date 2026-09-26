@@ -1,22 +1,27 @@
 <script lang="ts">
-	import type { NewMonitorInput } from '$lib/api';
+	import type { Monitor, NewMonitorInput } from '$lib/api';
 	import Icon from './Icon.svelte';
 
+	// When set, the form edits this monitor's name/description instead of
+	// creating a new one. Its URL is shown but locked: changing the probe
+	// target is a bigger change than a rename and isn't part of this form.
 	let {
+		editingMonitor = null,
 		error,
 		submitting,
 		onCancel,
 		onSubmit
 	}: {
+		editingMonitor?: Monitor | null;
 		error: string | null;
 		submitting: boolean;
 		onCancel: () => void;
 		onSubmit: (input: NewMonitorInput) => void;
 	} = $props();
 
-	let name = $state('');
-	let url = $state('');
-	let description = $state('');
+	let name = $state(editingMonitor?.name ?? '');
+	let url = $state(editingMonitor?.url ?? '');
+	let description = $state(editingMonitor?.description ?? '');
 
 	function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
@@ -26,7 +31,7 @@
 
 <form class="add-form" onsubmit={handleSubmit}>
 	<div class="form-header">
-		<h2>Nueva API</h2>
+		<h2>{editingMonitor ? 'Editar API' : 'Nueva API'}</h2>
 		<button type="button" class="icon-button" onclick={onCancel} aria-label="Cerrar formulario">
 			<Icon name="close-line" />
 		</button>
@@ -39,7 +44,13 @@
 
 	<label>
 		URL de health
-		<input type="text" placeholder="https://api.ejemplo.com/health" bind:value={url} required />
+		<input
+			type="text"
+			placeholder="https://api.ejemplo.com/health"
+			bind:value={url}
+			required
+			disabled={!!editingMonitor}
+		/>
 	</label>
 
 	<label>
@@ -57,7 +68,9 @@
 
 	<div class="form-actions">
 		<button type="button" class="ghost" onclick={onCancel}>Cancelar</button>
-		<button type="submit" class="primary" disabled={submitting}>Guardar API</button>
+		<button type="submit" class="primary" disabled={submitting}>
+			{editingMonitor ? 'Guardar cambios' : 'Guardar API'}
+		</button>
 	</div>
 </form>
 
@@ -133,6 +146,11 @@
 
 	textarea:focus {
 		padding: 9px 11px;
+	}
+
+	input:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
 	}
 
 	.form-error {

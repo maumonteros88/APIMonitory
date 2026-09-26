@@ -40,6 +40,11 @@ export interface NewMonitorInput {
 	description: string;
 }
 
+export interface MonitorDetailsInput {
+	name: string;
+	description: string;
+}
+
 export class ApiError extends Error {
 	status: number;
 
@@ -111,6 +116,13 @@ export function probeToken(token: string): Promise<MonitorsResponse> {
 export function createMonitor(input: NewMonitorInput): Promise<Monitor> {
 	return request<Monitor>('/api/monitors', {
 		method: 'POST',
+		body: JSON.stringify(input)
+	});
+}
+
+export function updateMonitor(id: string, input: MonitorDetailsInput): Promise<Monitor> {
+	return request<Monitor>(`/api/monitors/${id}`, {
+		method: 'PATCH',
 		body: JSON.stringify(input)
 	});
 }
