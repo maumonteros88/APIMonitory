@@ -16,6 +16,7 @@
 	import { ago } from '$lib/format';
 	import AddMonitorForm from '$lib/components/AddMonitorForm.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import MonitorBoard from '$lib/components/MonitorBoard.svelte';
 	import MonitorCard from '$lib/components/MonitorCard.svelte';
 	import StatusBanner from '$lib/components/StatusBanner.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
@@ -23,6 +24,8 @@
 
 	const POLL_MS = 15000;
 	const THEME_KEY = 'apimonitory_theme';
+	const VIEW_KEY = 'apimonitory_view';
+	const DAYS_CAPTION = 'Disponibilidad de los últimos 90 días';
 
 	let authenticated = $state(getToken() !== null);
 	let gateError = $state<string | null>(null);
@@ -55,6 +58,7 @@
 	let formSubmitting = $state(false);
 
 	let theme = $state<'light' | 'dark'>('light');
+	let view = $state<'list' | 'board'>('list');
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -70,6 +74,15 @@
 
 	function toggleTheme() {
 		applyTheme(theme === 'dark' ? 'light' : 'dark');
+	}
+
+	function setView(next: 'list' | 'board') {
+		view = next;
+		try {
+			localStorage.setItem(VIEW_KEY, next);
+		} catch {
+			// Storage unavailable: the toggle still works for this tab.
+		}
 	}
 
 	async function loadMonitors() {
@@ -165,6 +178,12 @@
 
 	onMount(() => {
 		theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+		try {
+			const savedView = localStorage.getItem(VIEW_KEY);
+			if (savedView === 'board' || savedView === 'list') view = savedView;
+		} catch {
+			// Storage unavailable: defaults to list view for this tab.
+		}
 		const unsubscribe = onUnauthorized(handleUnauthorized);
 
 		if (authenticated) {
@@ -193,6 +212,26 @@
 				<h1>Estado de APIs</h1>
 			</div>
 			<div class="actions">
+				<div class="view-switch">
+					<button
+						type="button"
+						class="view-option"
+						class:active={view === 'list'}
+						onclick={() => setView('list')}
+					>
+						<Icon name="list-check" />
+						Lista
+					</button>
+					<button
+						type="button"
+						class="view-option"
+						class:active={view === 'board'}
+						onclick={() => setView('board')}
+					>
+						<Icon name="layout-masonry-line" />
+						Board
+					</button>
+				</div>
 				<ThemeToggle {theme} onToggle={toggleTheme} />
 				<button type="button" onclick={handleCheckAll}>
 					<Icon name="refresh-line" />
@@ -228,30 +267,39 @@
 			/>
 		{/if}
 
-		<section class="monitor-list-section">
-			<div class="list-caption">Disponibilidad de los últimos 90 días</div>
-			<div class="monitor-list">
-				{#if !hasLoadedOnce && connectionError}
+		{#if !hasLoadedOnce && connectionError}
+			<section class="monitor-list-section">
+				<div class="list-caption">{DAYS_CAPTION}</div>
+				<div class="monitor-list">
 					<div class="empty-state">
 						<Icon name="pulse-line" size={32} />
 						<p class="empty-title">No se pudo conectar con el servidor</p>
 						<p class="empty-sub">Reintentando automáticamente…</p>
 					</div>
-				{:else if hasLoadedOnce && monitors.length === 0}
-					<div class="empty-state">
-						<Icon name="pulse-line" size={32} />
-						<p class="empty-title">No hay APIs para monitorear</p>
-						<p class="empty-sub">
-							Agrega la URL de health de una API para empezar a ver su estado.
-						</p>
-					</div>
-				{:else if hasLoadedOnce}
-					{#each monitors as monitor (monitor.id)}
-						<MonitorCard {monitor} onCheck={handleCheck} onDelete={handleDelete} />
-					{/each}
-				{/if}
-			</div>
-		</section>
+				</div>
+			</section>
+		{:else if hasLoadedOnce && view === 'board'}
+			<MonitorBoard {monitors} daysCaption={DAYS_CAPTION} onCheck={handleCheck} />
+		{:else if hasLoadedOnce}
+			<section class="monitor-list-section">
+				<div class="list-caption">{DAYS_CAPTION}</div>
+				<div class="monitor-list">
+					{#if monitors.length === 0}
+						<div class="empty-state">
+							<Icon name="pulse-line" size={32} />
+							<p class="empty-title">No hay APIs para monitorear</p>
+							<p class="empty-sub">
+								Agrega la URL de health de una API para empezar a ver su estado.
+							</p>
+						</div>
+					{:else}
+						{#each monitors as monitor (monitor.id)}
+							<MonitorCard {monitor} onCheck={handleCheck} onDelete={handleDelete} />
+						{/each}
+					{/if}
+				</div>
+			</section>
+		{/if}
 	</div>
 {/if}
 
@@ -300,7 +348,9 @@
 		align-items: center;
 	}
 
-	.actions button {
+	/* Direct child only, so the segmented view-switch's own buttons (nested
+	   one level deeper) don't inherit this full-size outlined-button look. */
+	.actions > button {
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
@@ -315,7 +365,7 @@
 		cursor: pointer;
 	}
 
-	.actions button:hover {
+	.actions > button:hover {
 		background: var(--m-soft);
 	}
 
@@ -327,6 +377,36 @@
 
 	.primary:hover {
 		background: var(--primary-700);
+	}
+
+	.view-switch {
+		display: flex;
+		height: 40px;
+		padding: 3px;
+		box-sizing: border-box;
+		border: 1px solid var(--border-default);
+		border-radius: 4px;
+		background: var(--m-surface);
+		gap: 2px;
+	}
+
+	.view-option {
+		border: 0;
+		border-radius: 2px;
+		padding: 0 12px;
+		font-size: 14px;
+		font-weight: 700;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		background: transparent;
+		color: var(--fg-2);
+	}
+
+	.view-option.active {
+		background: var(--m-ink);
+		color: var(--m-surface);
 	}
 
 	.connection-banner {

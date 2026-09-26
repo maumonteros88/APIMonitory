@@ -83,3 +83,32 @@ const STATUS_META: Record<MonitorStatus, StatusMeta> = {
 export function statusMeta(status: MonitorStatus): StatusMeta {
 	return STATUS_META[status];
 }
+
+export interface TileStyle {
+	bg: string;
+	fg: string;
+}
+
+/** Board-view tile colors. Unlike statusMeta's dot/text colors, "up" shades
+ * darker green as uptime drops, so a struggling-but-technically-up monitor
+ * still stands out from a solidly healthy one. */
+export function tileStyle(status: MonitorStatus, uptimePercent: number | null): TileStyle {
+	if (status === 'up') {
+		const bg =
+			uptimePercent === null || uptimePercent >= 99.5
+				? '#289B4F'
+				: uptimePercent >= 98
+					? '#23854A'
+					: '#1E6E3D';
+		return { bg, fg: '#FFFFFF' };
+	}
+	if (status === 'degraded') return { bg: '#FFC700', fg: '#191919' };
+	if (status === 'down') return { bg: '#DF4730', fg: '#FFFFFF' };
+	return { bg: 'var(--m-none)', fg: 'var(--m-ink)' };
+}
+
+/** Compact uptime percent for board tiles (no " disponibilidad" suffix). */
+export function uptimeShort(percent: number | null): string {
+	if (percent === null) return 'Sin datos';
+	return `${percent.toFixed(2).replace('.', ',')} %`;
+}

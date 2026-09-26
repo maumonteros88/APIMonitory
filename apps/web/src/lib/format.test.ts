@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { ago, dayColor, errorLabel, fmtDate, fmtMins, statusMeta, uptimeLabel } from './format';
+import {
+	ago,
+	dayColor,
+	errorLabel,
+	fmtDate,
+	fmtMins,
+	statusMeta,
+	tileStyle,
+	uptimeLabel,
+	uptimeShort
+} from './format';
 
 describe('fmtDate', () => {
 	it('formats a calendar date without shifting timezone', () => {
@@ -94,6 +104,46 @@ describe('dayColor', () => {
 		['major', '#DF4730']
 	] as const)('maps %s to its color', (state, color) => {
 		expect(dayColor(state)).toBe(color);
+	});
+});
+
+describe('tileStyle', () => {
+	it('shades a healthy monitor bright green', () => {
+		expect(tileStyle('up', 99.9)).toEqual({ bg: '#289B4F', fg: '#FFFFFF' });
+	});
+
+	it('treats no data as fully healthy', () => {
+		expect(tileStyle('up', null)).toEqual({ bg: '#289B4F', fg: '#FFFFFF' });
+	});
+
+	it('darkens as uptime drops between 98 and 99.5', () => {
+		expect(tileStyle('up', 98.5)).toEqual({ bg: '#23854A', fg: '#FFFFFF' });
+	});
+
+	it('darkens further below 98', () => {
+		expect(tileStyle('up', 90)).toEqual({ bg: '#1E6E3D', fg: '#FFFFFF' });
+	});
+
+	it('colors degraded yellow with dark text', () => {
+		expect(tileStyle('degraded', 95)).toEqual({ bg: '#FFC700', fg: '#191919' });
+	});
+
+	it('colors down red', () => {
+		expect(tileStyle('down', 50)).toEqual({ bg: '#DF4730', fg: '#FFFFFF' });
+	});
+
+	it('falls back to the neutral tokens for pending', () => {
+		expect(tileStyle('pending', null)).toEqual({ bg: 'var(--m-none)', fg: 'var(--m-ink)' });
+	});
+});
+
+describe('uptimeShort', () => {
+	it('formats a percentage with a comma decimal and no suffix', () => {
+		expect(uptimeShort(99.8712)).toBe('99,87 %');
+	});
+
+	it('falls back to "Sin datos" when there is no data', () => {
+		expect(uptimeShort(null)).toBe('Sin datos');
 	});
 });
 
