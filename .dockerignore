@@ -1,0 +1,14 @@
+.git
+.atl
+.claude
+
+node_modules
+apps/web/node_modules
+apps/web/build
+apps/web/.svelte-kit
+apps/api/internal/webui/dist
+apps/api/tmp
+
+.env
+.env.*
+!.env.example
