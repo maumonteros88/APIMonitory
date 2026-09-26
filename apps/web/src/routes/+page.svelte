@@ -81,8 +81,8 @@
 			authenticated = true;
 			await loadMonitors();
 			startPolling();
-		} catch {
-			gateError = 'Token inválido';
+		} catch (err) {
+			gateError = err instanceof UnauthorizedError ? 'Token inválido' : 'No se pudo conectar con el servidor';
 		} finally {
 			gateSubmitting = false;
 		}
