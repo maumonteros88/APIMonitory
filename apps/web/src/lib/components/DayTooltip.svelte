@@ -5,6 +5,30 @@
 
 	let { day, x, y }: { day: DayHistory; x: number; y: number } = $props();
 
+	const OFFSET = 16;
+	const MARGIN = 12;
+
+	let tooltipEl = $state<HTMLDivElement>();
+	let left = $state(x + OFFSET);
+	let top = $state(y + OFFSET);
+
+	// Flip to the opposite side of the cursor whenever the default offset
+	// would push the tooltip past the viewport edge, instead of letting it
+	// render off-screen and get clipped.
+	$effect(() => {
+		void day;
+		const el = tooltipEl;
+		if (!el) return;
+		const width = el.offsetWidth;
+		const height = el.offsetHeight;
+
+		const overflowsRight = x + OFFSET + width > window.innerWidth - MARGIN;
+		const overflowsBottom = y + OFFSET + height > window.innerHeight - MARGIN;
+
+		left = Math.max(MARGIN, overflowsRight ? x - OFFSET - width : x + OFFSET);
+		top = Math.max(MARGIN, overflowsBottom ? y - OFFSET - height : y + OFFSET);
+	});
+
 	const note = $derived.by(() => {
 		if (day.state === 'none') return 'Sin datos registrados para este día.';
 		if (day.checks > 0) return `${day.checks} verificaciones, ${day.fails} fallidas.`;
@@ -12,7 +36,7 @@
 	});
 </script>
 
-<div class="tooltip" style="left: {x}px; top: {y}px;">
+<div class="tooltip" bind:this={tooltipEl} style="left: {left}px; top: {top}px;">
 	<span class="tooltip-date">{fmtDate(day.date)}</span>
 
 	{#if day.downMinutes > 0}

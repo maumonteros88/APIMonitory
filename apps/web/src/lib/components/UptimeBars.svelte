@@ -12,11 +12,11 @@
 
 	function showTooltip(day: DayHistory, event: MouseEvent) {
 		hoveredDate = day.date;
-		tooltipPos = { x: event.clientX + 16, y: event.clientY + 16 };
+		tooltipPos = { x: event.clientX, y: event.clientY };
 	}
 
 	function moveTooltip(event: MouseEvent) {
-		tooltipPos = { x: event.clientX + 16, y: event.clientY + 16 };
+		tooltipPos = { x: event.clientX, y: event.clientY };
 	}
 
 	function hideTooltip() {
