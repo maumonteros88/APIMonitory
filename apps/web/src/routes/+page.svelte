@@ -139,7 +139,13 @@
 		formError = null;
 		try {
 			const created = await createMonitor(input);
-			monitors = [...monitors, created];
+			// Never blindly append: a concurrent poll that resolves around the
+			// same time can already include this monitor (the server created it
+			// before either request finished), and appending it again would
+			// leave two entries with the same id, crashing the keyed each-block.
+			monitors = monitors.some((m) => m.id === created.id)
+				? monitors.map((m) => (m.id === created.id ? created : m))
+				: [...monitors, created];
 			formOpen = false;
 		} catch (err) {
 			formError = err instanceof Error ? err.message : 'Ocurrió un error inesperado';
