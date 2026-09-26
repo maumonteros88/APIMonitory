@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-apimonitory}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-apimonitory}
+    volumes:
+      # postgres:18+ manages a major-version subdirectory under this path itself;
+      # mounting directly at .../data (the pre-18 convention) breaks startup.
+      - pgdata:/var/lib/postgresql
+    ports:
+      # Exposed to the host so `make dev-api` (go run, no Docker) can reach it.
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-apimonitory}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-apimonitory}?sslmode=disable
+      API_TOKEN: ${API_TOKEN:?set API_TOKEN in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
