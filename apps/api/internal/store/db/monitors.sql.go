@@ -153,3 +153,36 @@ func (q *Queries) UpdateMonitorAfterCheck(ctx context.Context, arg UpdateMonitor
 	}
 	return result.RowsAffected(), nil
 }
+
+const updateMonitorDetails = `-- name: UpdateMonitorDetails :one
+update monitors
+set name = $2,
+    description = $3
+where id = $1
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at
+`
+
+type UpdateMonitorDetailsParams struct {
+	ID          uuid.UUID `db:"id" json:"id"`
+	Name        string    `db:"name" json:"name"`
+	Description string    `db:"description" json:"description"`
+}
+
+func (q *Queries) UpdateMonitorDetails(ctx context.Context, arg UpdateMonitorDetailsParams) (Monitor, error) {
+	row := q.db.QueryRow(ctx, updateMonitorDetails, arg.ID, arg.Name, arg.Description)
+	var i Monitor
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Url,
+		&i.Status,
+		&i.ConsecutiveFailures,
+		&i.LastCheckedAt,
+		&i.LastHttpStatus,
+		&i.LastLatencyMs,
+		&i.LastErrorKind,
+		&i.CreatedAt,
+	)
+	return i, err
+}

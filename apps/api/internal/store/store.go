@@ -93,6 +93,22 @@ func (s *Store) GetMonitor(ctx context.Context, id uuid.UUID) (db.Monitor, error
 	return m, err
 }
 
+// UpdateMonitorDetails renames a monitor and/or changes its description.
+// Its URL is intentionally not editable here: changing the probe target is a
+// bigger behavioral change than a rename and isn't part of this operation.
+// Returns ErrNotFound if no monitor with that id exists.
+func (s *Store) UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string) (db.Monitor, error) {
+	m, err := s.queries.UpdateMonitorDetails(ctx, db.UpdateMonitorDetailsParams{
+		ID:          id,
+		Name:        name,
+		Description: description,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Monitor{}, ErrNotFound
+	}
+	return m, err
+}
+
 // DeleteMonitor removes a monitor, cascading its checks and daily_stats.
 // Returns ErrNotFound if no monitor with that id existed.
 func (s *Store) DeleteMonitor(ctx context.Context, id uuid.UUID) error {

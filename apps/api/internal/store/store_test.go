@@ -2,9 +2,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"apimonitory/internal/monitor"
 )
@@ -86,5 +89,40 @@ func TestStore_RegisterAttempt(t *testing.T) {
 	}
 	if stats[0].DegradedSeconds != 0 {
 		t.Errorf("daily_stats.degraded_seconds = %d, want 0", stats[0].DegradedSeconds)
+	}
+}
+
+func TestStore_UpdateMonitorDetails(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	created, err := s.CreateMonitor(ctx, "original name", "original desc", "https://example.com/health")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, created.ID)
+
+	updated, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc")
+	if err != nil {
+		t.Fatalf("UpdateMonitorDetails: %v", err)
+	}
+	if updated.Name != "renamed" || updated.Description != "new desc" {
+		t.Errorf("got name=%q description=%q, want %q/%q", updated.Name, updated.Description, "renamed", "new desc")
+	}
+	if updated.Url != created.Url {
+		t.Errorf("url changed to %q, want it untouched (%q)", updated.Url, created.Url)
+	}
+
+	if _, err := s.UpdateMonitorDetails(ctx, uuid.New(), "x", "y"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateMonitorDetails on missing id: err = %v, want ErrNotFound", err)
 	}
 }

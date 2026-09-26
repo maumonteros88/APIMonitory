@@ -15,6 +15,13 @@ where id = $1;
 delete from monitors
 where id = $1;
 
+-- name: UpdateMonitorDetails :one
+update monitors
+set name = $2,
+    description = $3
+where id = $1
+returning *;
+
 -- name: UpdateMonitorAfterCheck :execrows
 update monitors
 set status = $2,

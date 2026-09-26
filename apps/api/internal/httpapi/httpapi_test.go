@@ -48,6 +48,17 @@ func (f *fakeStore) GetMonitor(_ context.Context, id uuid.UUID) (db.Monitor, err
 	return m, nil
 }
 
+func (f *fakeStore) UpdateMonitorDetails(_ context.Context, id uuid.UUID, name, description string) (db.Monitor, error) {
+	m, ok := f.monitors[id]
+	if !ok {
+		return db.Monitor{}, store.ErrNotFound
+	}
+	m.Name = name
+	m.Description = description
+	f.monitors[id] = m
+	return m, nil
+}
+
 func (f *fakeStore) DeleteMonitor(_ context.Context, id uuid.UUID) error {
 	if _, ok := f.monitors[id]; !ok {
 		return store.ErrNotFound
@@ -188,6 +199,77 @@ func TestDeleteMonitor_Success(t *testing.T) {
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
+func TestUpdateMonitor_Success(t *testing.T) {
+	s := newFakeStore()
+	created, _ := s.CreateMonitor(context.Background(), "My API", "old desc", "https://example.com")
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+
+	req := authedRequest(
+		http.MethodPatch,
+		"/api/monitors/"+created.ID.String(),
+		strings.NewReader(`{"name":"Renamed API","description":"new desc"}`),
+	)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got monitorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Name != "Renamed API" || got.Description != "new desc" {
+		t.Fatalf("got name=%q description=%q, want %q/%q", got.Name, got.Description, "Renamed API", "new desc")
+	}
+}
+
+func TestUpdateMonitor_EmptyName(t *testing.T) {
+	s := newFakeStore()
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+
+	req := authedRequest(
+		http.MethodPatch,
+		"/api/monitors/"+created.ID.String(),
+		strings.NewReader(`{"name":"","description":"x"}`),
+	)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestUpdateMonitor_NotFound(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := authedRequest(
+		http.MethodPatch,
+		"/api/monitors/"+uuid.New().String(),
+		strings.NewReader(`{"name":"Renamed API","description":""}`),
+	)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestUpdateMonitor_InvalidID(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := authedRequest(http.MethodPatch, "/api/monitors/not-a-uuid", strings.NewReader(`{"name":"x"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
 

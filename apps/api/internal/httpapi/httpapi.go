@@ -28,6 +28,7 @@ type Store interface {
 	CreateMonitor(ctx context.Context, name, description, url string) (db.Monitor, error)
 	ListMonitors(ctx context.Context) ([]db.Monitor, error)
 	GetMonitor(ctx context.Context, id uuid.UUID) (db.Monitor, error)
+	UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string) (db.Monitor, error)
 	DeleteMonitor(ctx context.Context, id uuid.UUID) error
 	ListDailyStatsSince(ctx context.Context, id uuid.UUID, since time.Time) ([]db.DailyStat, error)
 }
@@ -66,6 +67,7 @@ func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration
 	mux.Handle("GET /api/monitors", a.requireToken(a.handleListMonitors))
 	mux.Handle("POST /api/monitors", a.requireToken(a.handleCreateMonitor))
 	mux.Handle("POST /api/monitors/check", a.requireToken(a.handleCheckAllMonitors))
+	mux.Handle("PATCH /api/monitors/{id}", a.requireToken(a.handleUpdateMonitor))
 	mux.Handle("DELETE /api/monitors/{id}", a.requireToken(a.handleDeleteMonitor))
 	mux.Handle("POST /api/monitors/{id}/check", a.requireToken(a.handleCheckMonitor))
 	// Catches any /api/* request that didn't match a route above, so it
@@ -213,6 +215,49 @@ func (a *api) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, mr)
+}
+
+type updateMonitorRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// handleUpdateMonitor renames a monitor and/or changes its description. Its
+// URL is deliberately not editable here (see Store.UpdateMonitorDetails).
+func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseMonitorID(w, r)
+	if !ok {
+		return
+	}
+
+	var req updateMonitorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "El cuerpo de la solicitud no es JSON válido")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" || len(name) > 100 {
+		writeError(w, http.StatusBadRequest, "Ingresa un nombre para la API")
+		return
+	}
+
+	m, err := a.store.UpdateMonitorDetails(r.Context(), id, name, req.Description)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "El monitor no existe")
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+
+	mr, err := a.buildMonitorResponse(r.Context(), m, defaultHistoryDays)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mr)
 }
 
 func (a *api) handleDeleteMonitor(w http.ResponseWriter, r *http.Request) {
