@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,8 +69,18 @@ func (fakeScheduler) RunManualCheck(_ context.Context, id uuid.UUID) (db.Monitor
 
 func (fakeScheduler) IsChecking(uuid.UUID) bool { return false }
 
+const testToken = "test-token"
+
 func newTestMux(s *fakeStore) *http.ServeMux {
-	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC)
+	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+}
+
+// authedRequest builds a request carrying the shared-secret bearer token, as
+// every /api/* route other than /healthz now requires.
+func authedRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	return req
 }
 
 func decodeError(t *testing.T, rec *httptest.ResponseRecorder) string {
@@ -88,7 +99,7 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) string {
 func TestCreateMonitor_EmptyName(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"","url":"https://example.com"}`))
+	req := authedRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"","url":"https://example.com"}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -103,7 +114,7 @@ func TestCreateMonitor_EmptyName(t *testing.T) {
 func TestCreateMonitor_InvalidURL(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"My API","url":"not-a-url"}`))
+	req := authedRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"My API","url":"not-a-url"}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -118,7 +129,7 @@ func TestCreateMonitor_InvalidURL(t *testing.T) {
 func TestCreateMonitor_InvalidURLScheme(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"My API","url":"ftp://example.com"}`))
+	req := authedRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"My API","url":"ftp://example.com"}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -130,7 +141,7 @@ func TestCreateMonitor_InvalidURLScheme(t *testing.T) {
 func TestCreateMonitor_Success(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"My API","url":"https://example.com/health"}`))
+	req := authedRequest(http.MethodPost, "/api/monitors", strings.NewReader(`{"name":"My API","url":"https://example.com/health"}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -142,7 +153,7 @@ func TestCreateMonitor_Success(t *testing.T) {
 func TestDeleteMonitor_NotFound(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/monitors/"+uuid.New().String(), nil)
+	req := authedRequest(http.MethodDelete, "/api/monitors/"+uuid.New().String(), nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -154,7 +165,7 @@ func TestDeleteMonitor_NotFound(t *testing.T) {
 func TestDeleteMonitor_InvalidID(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/monitors/not-a-uuid", nil)
+	req := authedRequest(http.MethodDelete, "/api/monitors/not-a-uuid", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -169,9 +180,9 @@ func TestDeleteMonitor_InvalidID(t *testing.T) {
 func TestDeleteMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/monitors/"+created.ID.String(), nil)
+	req := authedRequest(http.MethodDelete, "/api/monitors/"+created.ID.String(), nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -183,7 +194,7 @@ func TestDeleteMonitor_Success(t *testing.T) {
 func TestListMonitors_InvalidDays(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/monitors?days=45", nil)
+	req := authedRequest(http.MethodGet, "/api/monitors?days=45", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -222,11 +233,63 @@ func TestUnknownAPIPath_ReturnsJSON404NotSPA(t *testing.T) {
 func TestCheckMonitor_InvalidID(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
-	req := httptest.NewRequest(http.MethodPost, "/api/monitors/not-a-uuid/check", nil)
+	req := authedRequest(http.MethodPost, "/api/monitors/not-a-uuid/check", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestListMonitors_MissingToken(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/monitors", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if msg := decodeError(t, rec); msg == "" {
+		t.Errorf("expected a non-empty error message")
+	}
+}
+
+func TestListMonitors_WrongToken(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/monitors", nil)
+	req.Header.Set("Authorization", "Bearer not-the-token")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestDeleteMonitor_MissingToken(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/monitors/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401, want auth to be checked before existence", rec.Code)
+	}
+}
+
+func TestHealthz_DoesNotRequireToken(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (healthz must stay open for load balancer probes)", rec.Code)
 	}
 }

@@ -19,6 +19,7 @@ type Config struct {
 	MaxConcurrency   int
 	AppTimezone      *time.Location
 	DatabaseURL      string
+	APIToken         string
 	Port             string
 }
 
@@ -81,6 +82,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 	cfg.DatabaseURL = dbURL
+
+	apiToken := os.Getenv("API_TOKEN")
+	if apiToken == "" {
+		return Config{}, fmt.Errorf("API_TOKEN is required")
+	}
+	cfg.APIToken = apiToken
 
 	cfg.Port = stringEnv("PORT", "8080")
 

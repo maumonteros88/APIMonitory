@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -47,22 +48,26 @@ type api struct {
 	bgCtx     context.Context // base context for fire-and-forget background checks
 	interval  time.Duration
 	loc       *time.Location
+	token     string
 }
 
 // New builds the API routes on a fresh http.ServeMux. bgCtx is used as the
 // base context for checks triggered in the background (POST
 // /api/monitors/check); it should be canceled on shutdown so those checks
-// abort cleanly.
-func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location) *http.ServeMux {
-	a := &api{store: s, scheduler: sched, bgCtx: bgCtx, interval: interval, loc: loc}
+// abort cleanly. token is the shared secret required (as "Authorization:
+// Bearer <token>") on every /api/* route except /healthz: without it,
+// anyone with network access to the port could delete monitors (cascading,
+// irreversible) or create ones that get probed on a schedule.
+func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string) *http.ServeMux {
+	a := &api{store: s, scheduler: sched, bgCtx: bgCtx, interval: interval, loc: loc, token: token}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.handleHealthz)
-	mux.HandleFunc("GET /api/monitors", a.handleListMonitors)
-	mux.HandleFunc("POST /api/monitors", a.handleCreateMonitor)
-	mux.HandleFunc("POST /api/monitors/check", a.handleCheckAllMonitors)
-	mux.HandleFunc("DELETE /api/monitors/{id}", a.handleDeleteMonitor)
-	mux.HandleFunc("POST /api/monitors/{id}/check", a.handleCheckMonitor)
+	mux.Handle("GET /api/monitors", a.requireToken(a.handleListMonitors))
+	mux.Handle("POST /api/monitors", a.requireToken(a.handleCreateMonitor))
+	mux.Handle("POST /api/monitors/check", a.requireToken(a.handleCheckAllMonitors))
+	mux.Handle("DELETE /api/monitors/{id}", a.requireToken(a.handleDeleteMonitor))
+	mux.Handle("POST /api/monitors/{id}/check", a.requireToken(a.handleCheckMonitor))
 	// Catches any /api/* request that didn't match a route above, so it
 	// never falls through to the SPA handler mounted at "/" and returns
 	// index.html for a typo'd or unsupported API path.
@@ -71,6 +76,22 @@ func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration
 	})
 
 	return mux
+}
+
+// requireToken rejects any request whose "Authorization: Bearer <token>"
+// header doesn't match the configured shared secret, using a constant-time
+// comparison so response timing can't be used to guess the token.
+func (a *api) requireToken(next http.HandlerFunc) http.Handler {
+	const prefix = "Bearer "
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("Authorization")
+		if !strings.HasPrefix(got, prefix) ||
+			subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(a.token)) != 1 {
+			writeError(w, http.StatusUnauthorized, "Token de autenticación inválido o ausente")
+			return
+		}
+		next(w, r)
+	})
 }
 
 func (a *api) handleHealthz(w http.ResponseWriter, r *http.Request) {

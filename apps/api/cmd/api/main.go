@@ -52,7 +52,7 @@ func main() {
 		sched.Run(appCtx)
 	}()
 
-	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone)
+	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken)
 
 	spa, err := webui.Handler()
 	if err != nil {
