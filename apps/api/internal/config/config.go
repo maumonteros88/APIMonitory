@@ -32,17 +32,26 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if checkInterval <= 0 {
+		return Config{}, fmt.Errorf("CHECK_INTERVAL must be positive, got %s", checkInterval)
+	}
 	cfg.CheckInterval = checkInterval
 
 	checkTimeout, err := durationEnv("CHECK_TIMEOUT", "5s")
 	if err != nil {
 		return Config{}, err
 	}
+	if checkTimeout <= 0 {
+		return Config{}, fmt.Errorf("CHECK_TIMEOUT must be positive, got %s", checkTimeout)
+	}
 	cfg.CheckTimeout = checkTimeout
 
 	retryDelay, err := durationEnv("RETRY_DELAY", "10s")
 	if err != nil {
 		return Config{}, err
+	}
+	if retryDelay <= 0 {
+		return Config{}, fmt.Errorf("RETRY_DELAY must be positive, got %s", retryDelay)
 	}
 	cfg.RetryDelay = retryDelay
 

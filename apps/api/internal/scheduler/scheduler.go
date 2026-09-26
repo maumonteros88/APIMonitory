@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -86,16 +87,31 @@ func (s *Scheduler) tick(ctx context.Context, wg *sync.WaitGroup) {
 	}
 
 	for _, m := range monitors {
-		if _, alreadyRunning := s.inFlight.LoadOrStore(m.ID, struct{}{}); alreadyRunning {
+		id := m.ID
+		if _, alreadyRunning := s.inFlight.LoadOrStore(id, struct{}{}); alreadyRunning {
 			continue
 		}
 
 		wg.Add(1)
-		go func(m db.Monitor) {
+		go func() {
 			defer wg.Done()
-			defer s.inFlight.Delete(m.ID)
-			s.probeAndPersist(ctx, m, true)
-		}(m)
+			defer s.inFlight.Delete(id)
+
+			// Re-read after claiming the in-flight guard, not before: the
+			// list above can go stale by the time this goroutine runs, and
+			// probing with it directly would let a concurrent manual
+			// check's fresher status/failure count get silently
+			// overwritten (RunManualCheck already reads fresh the same
+			// way, right after acquiring the same guard).
+			fresh, err := s.store.GetMonitor(ctx, id)
+			if err != nil {
+				if !errors.Is(err, store.ErrNotFound) {
+					slog.Warn("scheduler: failed to refresh monitor before scheduled check", "monitor_id", id, "error", err)
+				}
+				return
+			}
+			s.probeAndPersist(ctx, fresh, true)
+		}()
 	}
 }
 
@@ -129,25 +145,31 @@ func (s *Scheduler) IsChecking(id uuid.UUID) bool {
 // persists the result. On failure it retries once after RetryDelay before
 // deciding the final outcome (the anti-false-positive policy lives in
 // monitor.Next, which additionally requires FailureThreshold consecutive
-// failed attempts before flipping a monitor to down).
+// failed attempts before flipping a monitor to down). The concurrency
+// semaphore is released during the retry sleep and re-acquired only for
+// the retry probe itself, so a slow batch of confirmation retries can't
+// starve other monitors' checks (or a synchronous manual check) out of
+// every slot for the whole RetryDelay.
 func (s *Scheduler) probeAndPersist(ctx context.Context, m db.Monitor, scheduled bool) {
-	select {
-	case s.sem <- struct{}{}:
-	case <-ctx.Done():
+	if !s.acquireSem(ctx) {
 		return
 	}
-	defer func() { <-s.sem }()
-
 	result := s.checker.Probe(ctx, m.Url)
+	s.releaseSem()
 
 	currentStatus := monitor.Status(m.Status)
 	if !result.Success && currentStatus != monitor.StatusDown {
 		select {
 		case <-time.After(s.retryDelay):
-			result = s.checker.Probe(ctx, m.Url)
 		case <-ctx.Done():
 			return
 		}
+
+		if !s.acquireSem(ctx) {
+			return
+		}
+		result = s.checker.Probe(ctx, m.Url)
+		s.releaseSem()
 	}
 
 	newStatus, newFailures := monitor.Next(
@@ -171,3 +193,17 @@ func (s *Scheduler) probeAndPersist(ctx context.Context, m db.Monitor, scheduled
 		slog.Warn("scheduler: failed to persist check attempt", "monitor_id", m.ID, "error", err)
 	}
 }
+
+// acquireSem blocks for a concurrency slot, returning false if ctx is
+// canceled first.
+func (s *Scheduler) acquireSem(ctx context.Context) bool {
+	select {
+	case s.sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// releaseSem frees a slot acquired via acquireSem.
+func (s *Scheduler) releaseSem() { <-s.sem }

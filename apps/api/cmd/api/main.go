@@ -24,10 +24,18 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
+	// Registered first so it runs last, after every other cleanup defer
+	// below: os.Exit skips deferred calls, so anything that needs to run
+	// on a fatal path (closing the store, canceling appCtx) must be
+	// deferred before this one and only the exit code set here.
+	var exitCode int
+	defer func() { os.Exit(exitCode) }()
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
+		exitCode = 1
+		return
 	}
 
 	// appCtx is the app's overall lifetime context: canceling it stops the
@@ -39,7 +47,8 @@ func main() {
 	st, err := store.Open(appCtx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to open store", "error", err)
-		os.Exit(1)
+		exitCode = 1
+		return
 	}
 	defer st.Close()
 
@@ -57,7 +66,8 @@ func main() {
 	spa, err := webui.Handler()
 	if err != nil {
 		slog.Error("failed to build webui handler", "error", err)
-		os.Exit(1)
+		exitCode = 1
+		return
 	}
 	mux.Handle("/", spa)
 
@@ -67,17 +77,32 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	// Buffered so the goroutine can report a bind/serve failure and exit
+	// even if nothing is listening on the other end yet.
+	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("starting server", "port", cfg.Port)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server stopped unexpectedly", "error", err)
+		err := srv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+			return
 		}
+		serveErr <- nil
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	slog.Info("shutdown signal received")
+
+	// If the server never manages to serve (e.g. the port is already in
+	// use), fall through to the same shutdown path instead of leaving the
+	// process alive with nothing listening on /healthz.
+	select {
+	case <-stop:
+		slog.Info("shutdown signal received")
+	case err := <-serveErr:
+		slog.Error("server failed to serve, shutting down", "error", err)
+		exitCode = 1
+	}
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
