@@ -9,9 +9,17 @@ dev-db:
 
 # Run the API with `go run` against the dev-db Postgres instance.
 # Reads DATABASE_URL/API_TOKEN from the environment, falling back to .env.
+# Variables already exported in the shell take precedence over .env: we
+# stash them before sourcing and restore them after, since `source` would
+# otherwise silently overwrite an exported value with an empty or stale
+# one from .env.
 dev-api:
 	set -eu; \
+	_API_TOKEN="$${API_TOKEN-}"; _POSTGRES_PASSWORD="$${POSTGRES_PASSWORD-}"; _DATABASE_URL="$${DATABASE_URL-}"; \
 	set -a; [ -f .env ] && source .env; set +a; \
+	[ -n "$$_API_TOKEN" ] && API_TOKEN="$$_API_TOKEN"; \
+	[ -n "$$_POSTGRES_PASSWORD" ] && POSTGRES_PASSWORD="$$_POSTGRES_PASSWORD"; \
+	[ -n "$$_DATABASE_URL" ] && DATABASE_URL="$$_DATABASE_URL"; \
 	: "$${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env or the environment}"; \
 	: "$${API_TOKEN:?set API_TOKEN in .env or the environment}"; \
 	export DATABASE_URL="$${DATABASE_URL:-postgres://$${POSTGRES_USER:-apimonitory}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5433}/$${POSTGRES_DB:-apimonitory}?sslmode=disable}"; \
