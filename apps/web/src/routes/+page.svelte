@@ -12,9 +12,12 @@
 		createMonitor,
 		deleteMonitor,
 		fetchMonitors,
+		mergeMonitors,
 		onUnauthorized,
 		probeToken,
+		subscribeToMonitorEvents,
 		updateMonitor,
+		upsertMonitor,
 		type Monitor,
 		type NewMonitorInput
 	} from '$lib/api';
@@ -28,7 +31,15 @@
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import TokenGate from '$lib/components/TokenGate.svelte';
 
-	const POLL_MS = 15000;
+	// The poll is now just a reconciliation safety net: real-time updates
+	// come from the SSE stream (see startEvents), which drops a subscriber
+	// that can't keep up rather than losing events silently, and the events
+	// connection is closed and fully reloaded on tab visibility changes --
+	// so a slow, infrequent backstop is enough here.
+	const POLL_MS = 60000;
+	// Keeps "hace X" text (the connection banner) from looking frozen now
+	// that the network poll driving it is so much slower.
+	const NOW_TICK_MS = 15000;
 	const THEME_KEY = 'apimonitory_theme';
 	const VIEW_KEY = 'apimonitory_view';
 	const DAYS_CAPTION = 'Disponibilidad de los últimos 90 días';
@@ -42,6 +53,9 @@
 	let hasLoadedOnce = $state(false);
 	let lastSuccessAt = $state<number | null>(null);
 	let lastFailureAt = $state<number | null>(null);
+	// Ticks independently of any network activity (poll or SSE), purely so
+	// connectionSub's "hace X" wording doesn't look frozen between polls.
+	let now = $state(Date.now());
 
 	// A poll failure only matters if it's the most recent attempt: a
 	// success after a failure clears it without needing to reset
@@ -51,9 +65,10 @@
 	);
 
 	const connectionSub = $derived.by(() => {
-		// Read lastFailureAt so this recomputes on every failed poll tick
-		// (every POLL_MS), keeping the "hace X" wording fresh even though
-		// lastSuccessAt itself doesn't change while the outage continues.
+		// Read now/lastFailureAt so this recomputes on every tick of either,
+		// keeping the "hace X" wording fresh even though lastSuccessAt
+		// itself doesn't change while the outage continues.
+		void now;
 		void lastFailureAt;
 		if (!hasLoadedOnce || lastSuccessAt === null) return 'No se pudo conectar con el servidor';
 		return `Mostrando datos de ${ago(new Date(lastSuccessAt).toISOString())}`;
@@ -68,6 +83,8 @@
 	let view = $state<'list' | 'board'>('list');
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
+	let nowTickHandle: ReturnType<typeof setInterval> | undefined;
+	let eventsClose: (() => void) | null = null;
 
 	function applyTheme(next: 'light' | 'dark') {
 		theme = next;
@@ -95,7 +112,10 @@
 	async function loadMonitors() {
 		try {
 			const res = await fetchMonitors(90);
-			monitors = res.monitors;
+			// A merge, not a blind replace: a slow poll response can resolve
+			// after a newer SSE event already updated the same monitor, and
+			// a plain replace would silently regress it back to stale data.
+			monitors = mergeMonitors(monitors, res.monitors);
 			intervalSeconds = res.intervalSeconds;
 			hasLoadedOnce = true;
 			lastSuccessAt = Date.now();
@@ -116,6 +136,43 @@
 		pollHandle = undefined;
 	}
 
+	// The real-time path: pushes a monitor's fresh state the moment a check
+	// completes, instead of every open tab re-polling everything on a timer.
+	// The (much slower) poll above stays on as a reconciliation backstop.
+	function startEvents() {
+		stopEvents();
+		eventsClose = subscribeToMonitorEvents(
+			(m) => {
+				monitors = upsertMonitor(monitors, m);
+				lastSuccessAt = Date.now();
+			},
+			(ok) => {
+				if (ok) lastSuccessAt = Date.now();
+				else lastFailureAt = Date.now();
+			}
+		);
+	}
+
+	function stopEvents() {
+		eventsClose?.();
+		eventsClose = null;
+	}
+
+	// Closing the events stream while the tab is hidden, and doing a full
+	// reload (not just reopening the stream) when it becomes visible again,
+	// matters for a real reason: browsers cap same-origin connections at
+	// around 6 over HTTP/1.1, and an SSE connection stays open indefinitely
+	// -- past a handful of background tabs, everything else (the poll, a
+	// manual check) would start hanging.
+	function handleVisibilityChange() {
+		if (document.visibilityState === 'hidden') {
+			stopEvents();
+		} else if (authenticated) {
+			loadMonitors();
+			startEvents();
+		}
+	}
+
 	async function handleGateSubmit(token: string) {
 		gateSubmitting = true;
 		gateError = null;
@@ -125,6 +182,7 @@
 			authenticated = true;
 			await loadMonitors();
 			startPolling();
+			startEvents();
 		} catch (err) {
 			gateError = err instanceof UnauthorizedError ? 'Token inválido' : 'No se pudo conectar con el servidor';
 		} finally {
@@ -134,6 +192,7 @@
 
 	function handleUnauthorized() {
 		stopPolling();
+		stopEvents();
 		authenticated = false;
 		monitors = [];
 		hasLoadedOnce = false;
@@ -170,16 +229,14 @@
 					name: input.name,
 					description: input.description
 				});
-				monitors = monitors.map((m) => (m.id === updated.id ? updated : m));
+				monitors = upsertMonitor(monitors, updated);
 			} else {
 				const created = await createMonitor(input);
-				// Never blindly append: a concurrent poll that resolves around the
-				// same time can already include this monitor (the server created it
-				// before either request finished), and appending it again would
-				// leave two entries with the same id, crashing the keyed each-block.
-				monitors = monitors.some((m) => m.id === created.id)
-					? monitors.map((m) => (m.id === created.id ? created : m))
-					: [...monitors, created];
+				// Never blindly append: a concurrent poll or SSE event that
+				// resolves around the same time can already include this
+				// monitor, and appending it again would leave two entries
+				// with the same id, crashing the keyed each-block.
+				monitors = upsertMonitor(monitors, created);
 			}
 			closeForm();
 		} catch (err) {
@@ -193,7 +250,7 @@
 		monitors = monitors.map((m) => (m.id === id ? { ...m, checking: true } : m));
 		try {
 			const updated = await checkMonitor(id);
-			monitors = monitors.map((m) => (m.id === id ? updated : m));
+			monitors = upsertMonitor(monitors, updated);
 		} catch (err) {
 			if (!(err instanceof UnauthorizedError)) console.error('check failed', err);
 			monitors = monitors.map((m) => (m.id === id ? { ...m, checking: false } : m));
@@ -226,15 +283,23 @@
 			// Storage unavailable: defaults to list view for this tab.
 		}
 		const unsubscribe = onUnauthorized(handleUnauthorized);
+		document.addEventListener('visibilitychange', handleVisibilityChange);
+		nowTickHandle = setInterval(() => {
+			now = Date.now();
+		}, NOW_TICK_MS);
 
 		if (authenticated) {
 			loadMonitors();
 			startPolling();
+			startEvents();
 		}
 
 		return () => {
 			unsubscribe();
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
+			if (nowTickHandle) clearInterval(nowTickHandle);
 			stopPolling();
+			stopEvents();
 		};
 	});
 </script>

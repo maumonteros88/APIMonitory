@@ -104,6 +104,36 @@ async function request<T>(path: string, options: RequestInit = {}, tokenOverride
 	return (await res.json()) as T;
 }
 
+/** True if a is a strictly older lastCheck than b -- used to keep the
+ * poll (every 60s) and the SSE event stream from stepping on each other if
+ * a slow poll response resolves after a newer event already landed. */
+function isOlder(a: LastCheck | null, b: LastCheck | null): boolean {
+	return a !== null && b !== null && a.at < b.at;
+}
+
+/** Inserts m into list, or replaces the existing entry with the same id --
+ * unless the existing entry's lastCheck is already newer than m's, in which
+ * case list is returned unchanged. */
+export function upsertMonitor(list: Monitor[], m: Monitor): Monitor[] {
+	const index = list.findIndex((existing) => existing.id === m.id);
+	if (index === -1) return [...list, m];
+	if (isOlder(m.lastCheck, list[index].lastCheck)) return list;
+	return list.map((item, i) => (i === index ? m : item));
+}
+
+/** Replaces current with fetched (a fresh GET /api/monitors result), except
+ * that any monitor whose current entry is newer than the fetched one (the
+ * same poll/event race upsertMonitor guards against) keeps its current
+ * entry instead. A monitor missing from fetched (deleted server-side) is
+ * dropped, same as a plain replace would do. */
+export function mergeMonitors(current: Monitor[], fetched: Monitor[]): Monitor[] {
+	const byId = new Map(current.map((m) => [m.id, m]));
+	return fetched.map((m) => {
+		const existing = byId.get(m.id);
+		return existing && isOlder(m.lastCheck, existing.lastCheck) ? existing : m;
+	});
+}
+
 export function fetchMonitors(days = 90): Promise<MonitorsResponse> {
 	return request<MonitorsResponse>(`/api/monitors?days=${days}`);
 }
@@ -138,4 +168,104 @@ export function checkMonitor(id: string): Promise<Monitor> {
 
 export function checkAllMonitors(): Promise<void> {
 	return request<void>('/api/monitors/check', { method: 'POST' });
+}
+
+const EVENTS_RETRY_MS = 3000;
+
+/** Subscribes to GET /api/events: onMonitor fires once per "monitor" frame
+ * (a full Monitor, same shape a fetchMonitors entry has), and
+ * onConnectionChange(true) fires on any frame at all (including the
+ * periodic heartbeat comment) as a liveness signal, onConnectionChange(false)
+ * when the connection drops.
+ *
+ * Deliberately fetch + a hand-rolled parser instead of the browser's native
+ * EventSource: EventSource can't set the Authorization header, and it can't
+ * see a 401 either (it just gets a generic error with no status), which
+ * would make a rotated token unrecoverable without a full page reload. This
+ * reuses the exact same header-based auth (and the same onUnauthorized
+ * listeners) as every other request.
+ *
+ * Returns a function that closes the connection and stops reconnecting. */
+export function subscribeToMonitorEvents(
+	onMonitor: (m: Monitor) => void,
+	onConnectionChange: (ok: boolean) => void
+): () => void {
+	let closed = false;
+	let controller: AbortController | null = null;
+	let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function handleFrame(frame: string) {
+		let eventType = '';
+		let data = '';
+		for (const rawLine of frame.split('\n')) {
+			const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+			if (line.startsWith('event: ')) eventType = line.slice('event: '.length);
+			else if (line.startsWith('data: ')) data = line.slice('data: '.length);
+			else if (line.startsWith(':')) eventType ||= 'heartbeat';
+		}
+		if (!eventType) return;
+		onConnectionChange(true);
+		if (eventType === 'monitor' && data) {
+			try {
+				onMonitor(JSON.parse(data) as Monitor);
+			} catch {
+				// Malformed frame: skip it, the next reconciliation poll settles it.
+			}
+		}
+	}
+
+	async function connect() {
+		if (closed) return;
+		controller = new AbortController();
+
+		try {
+			const token = getToken();
+			const res = await fetch('/api/events', {
+				headers: token ? { Authorization: `Bearer ${token}` } : {},
+				signal: controller.signal
+			});
+
+			if (res.status === 401) {
+				closed = true; // a rotated/invalid token won't fix itself on retry
+				clearToken();
+				for (const listener of unauthorizedListeners) listener();
+				return;
+			}
+			if (!res.ok || !res.body) {
+				throw new ApiError(res.status, 'No se pudo conectar al canal de eventos');
+			}
+
+			const reader = res.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = '';
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+
+				let sep: number;
+				while ((sep = buffer.indexOf('\n\n')) !== -1) {
+					handleFrame(buffer.slice(0, sep));
+					buffer = buffer.slice(sep + 2);
+				}
+			}
+		} catch {
+			// Aborted by our own close(), or a genuine network/stream error --
+			// either way there's nothing more to do here than let the retry
+			// (below) or the caller's close() decide what happens next.
+		} finally {
+			if (!closed) {
+				onConnectionChange(false);
+				retryTimer = setTimeout(connect, EVENTS_RETRY_MS);
+			}
+		}
+	}
+
+	connect();
+
+	return () => {
+		closed = true;
+		if (retryTimer) clearTimeout(retryTimer);
+		controller?.abort();
+	};
 }
