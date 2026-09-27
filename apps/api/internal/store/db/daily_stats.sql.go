@@ -12,6 +12,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const listAllDailyStatsSince = `-- name: ListAllDailyStatsSince :many
+select monitor_id, day, checks, fails, down_seconds, degraded_seconds from daily_stats
+where day >= $1
+order by monitor_id, day asc
+`
+
+func (q *Queries) ListAllDailyStatsSince(ctx context.Context, day pgtype.Date) ([]DailyStat, error) {
+	rows, err := q.db.Query(ctx, listAllDailyStatsSince, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DailyStat
+	for rows.Next() {
+		var i DailyStat
+		if err := rows.Scan(
+			&i.MonitorID,
+			&i.Day,
+			&i.Checks,
+			&i.Fails,
+			&i.DownSeconds,
+			&i.DegradedSeconds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDailyStatsSince = `-- name: ListDailyStatsSince :many
 select monitor_id, day, checks, fails, down_seconds, degraded_seconds from daily_stats
 where monitor_id = $1 and day >= $2

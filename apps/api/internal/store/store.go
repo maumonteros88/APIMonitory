@@ -131,6 +131,13 @@ func (s *Store) ListDailyStatsSince(ctx context.Context, id uuid.UUID, since tim
 	})
 }
 
+// ListAllDailyStatsSince returns the daily_stats rows for every monitor, on
+// or after since, in one query. Used by the list endpoint to avoid one
+// ListDailyStatsSince call per monitor.
+func (s *Store) ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]db.DailyStat, error) {
+	return s.queries.ListAllDailyStatsSince(ctx, pgtype.Date{Time: dayOf(since), Valid: true})
+}
+
 // Attempt describes one completed probe attempt to persist.
 type Attempt struct {
 	MonitorID     uuid.UUID

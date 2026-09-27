@@ -11,3 +11,8 @@ set checks = daily_stats.checks + 1,
 select * from daily_stats
 where monitor_id = $1 and day >= $2
 order by day asc;
+
+-- name: ListAllDailyStatsSince :many
+select * from daily_stats
+where day >= $1
+order by monitor_id, day asc;

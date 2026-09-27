@@ -20,7 +20,8 @@ import (
 // fakeStore is an in-memory Store implementation so these tests never
 // touch Postgres.
 type fakeStore struct {
-	monitors map[uuid.UUID]db.Monitor
+	monitors      map[uuid.UUID]db.Monitor
+	allDailyStats []db.DailyStat
 }
 
 func newFakeStore() *fakeStore {
@@ -70,6 +71,10 @@ func (f *fakeStore) DeleteMonitor(_ context.Context, id uuid.UUID) error {
 
 func (f *fakeStore) ListDailyStatsSince(_ context.Context, _ uuid.UUID, _ time.Time) ([]db.DailyStat, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ListAllDailyStatsSince(_ context.Context, _ time.Time) ([]db.DailyStat, error) {
+	return f.allDailyStats, nil
 }
 
 // fakeScheduler never performs real probes.
@@ -292,6 +297,49 @@ func TestListMonitors_IncludesCommit(t *testing.T) {
 	}
 	if len(got.Monitors) != 1 || got.Monitors[0].Commit == nil || *got.Monitors[0].Commit != "abc1234" {
 		t.Fatalf("got monitors=%+v, want one monitor with commit=abc1234", got.Monitors)
+	}
+}
+
+// TestListMonitors_GroupsStatsPerMonitor guards the one risk introduced by
+// batching the daily_stats query for the whole list into a single call: that
+// grouping the flat result by monitor_id could cross-attribute one
+// monitor's stats to another.
+func TestListMonitors_GroupsStatsPerMonitor(t *testing.T) {
+	s := newFakeStore()
+	a1, _ := s.CreateMonitor(context.Background(), "API A", "", "https://a.example.com")
+	a2, _ := s.CreateMonitor(context.Background(), "API B", "", "https://b.example.com")
+
+	today := pgtype.Date{Time: time.Now().UTC(), Valid: true}
+	s.allDailyStats = []db.DailyStat{
+		// B listed first, so an order-dependent bug in the grouping would
+		// still be exercised.
+		{MonitorID: a2.ID, Day: today, Checks: 1, DownSeconds: 3600},
+		{MonitorID: a1.ID, Day: today, Checks: 1, DownSeconds: 0},
+	}
+
+	mux := newTestMux(s)
+	req := authedRequest(http.MethodGet, "/api/monitors?days=30", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var got monitorsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.Monitors) != 2 {
+		t.Fatalf("got %d monitors, want 2", len(got.Monitors))
+	}
+
+	byID := make(map[string]monitorResponse, 2)
+	for _, m := range got.Monitors {
+		byID[m.ID] = m
+	}
+
+	if up := byID[a1.ID.String()].UptimePercent; up == nil || *up != 100 {
+		t.Errorf("monitor A uptime = %v, want 100 (no downtime of its own)", up)
+	}
+	if up := byID[a2.ID.String()].UptimePercent; up == nil || *up >= 100 {
+		t.Errorf("monitor B uptime = %v, want <100 (has an hour of downtime)", up)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"apimonitory/internal/monitor"
+	"apimonitory/internal/store/db"
 )
 
 // TestStore_RegisterAttempt requires a live Postgres instance reachable via
@@ -189,5 +190,83 @@ func TestStore_RegisterAttempt_PersistsCommit(t *testing.T) {
 	}
 	if got.LastCommit.Valid {
 		t.Errorf("last_commit = %+v, want cleared after a commit-less attempt", got.LastCommit)
+	}
+}
+
+// TestStore_ListAllDailyStatsSince guards the batched query the list
+// endpoint uses instead of one ListDailyStatsSince call per monitor: it
+// must return every monitor's own rows, correctly attributed by monitor_id.
+func TestStore_ListAllDailyStatsSince(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	m1, err := s.CreateMonitor(ctx, "monitor A", "", "https://a.example.com/health")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, m1.ID)
+
+	m2, err := s.CreateMonitor(ctx, "monitor B", "", "https://b.example.com/health")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, m2.ID)
+
+	now := time.Now()
+	if err := s.RegisterAttempt(ctx, Attempt{
+		MonitorID:     m1.ID,
+		Result:        monitor.ProbeResult{Success: true, HTTPStatus: 200, LatencyMs: 10},
+		NewStatus:     monitor.StatusUp,
+		Scheduled:     true,
+		CheckInterval: 60 * time.Second,
+		Now:           now,
+	}); err != nil {
+		t.Fatalf("RegisterAttempt(m1): %v", err)
+	}
+	if err := s.RegisterAttempt(ctx, Attempt{
+		MonitorID:     m2.ID,
+		Result:        monitor.ProbeResult{Success: false, ErrorKind: "timeout"},
+		NewStatus:     monitor.StatusDown,
+		NewFailures:   2,
+		Scheduled:     true,
+		CheckInterval: 60 * time.Second,
+		Now:           now,
+	}); err != nil {
+		t.Fatalf("RegisterAttempt(m2): %v", err)
+	}
+
+	stats, err := s.ListAllDailyStatsSince(ctx, now.AddDate(0, 0, -1))
+	if err != nil {
+		t.Fatalf("ListAllDailyStatsSince: %v", err)
+	}
+
+	byMonitor := make(map[uuid.UUID]db.DailyStat, len(stats))
+	for _, row := range stats {
+		byMonitor[row.MonitorID] = row
+	}
+
+	s1, ok := byMonitor[m1.ID]
+	if !ok {
+		t.Fatalf("no daily_stats row for m1")
+	}
+	if s1.DownSeconds != 0 {
+		t.Errorf("m1 down_seconds = %d, want 0", s1.DownSeconds)
+	}
+
+	s2, ok := byMonitor[m2.ID]
+	if !ok {
+		t.Fatalf("no daily_stats row for m2")
+	}
+	if s2.DownSeconds != 60 {
+		t.Errorf("m2 down_seconds = %d, want 60", s2.DownSeconds)
 	}
 }

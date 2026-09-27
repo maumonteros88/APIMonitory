@@ -31,6 +31,7 @@ type Store interface {
 	UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string) (db.Monitor, error)
 	DeleteMonitor(ctx context.Context, id uuid.UUID) error
 	ListDailyStatsSince(ctx context.Context, id uuid.UUID, since time.Time) ([]db.DailyStat, error)
+	ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]db.DailyStat, error)
 }
 
 // Scheduler is the subset of the scheduler the HTTP API needs to trigger
@@ -152,17 +153,29 @@ func (a *api) handleListMonitors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	today := time.Now().In(a.loc)
+	since := today.AddDate(0, 0, -(days - 1))
+
+	// One query for every monitor's history instead of one query per
+	// monitor: this endpoint is polled every few seconds by every open
+	// dashboard tab, so its query count can't grow with monitor count.
+	allStats, err := a.store.ListAllDailyStatsSince(r.Context(), since)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	statsByMonitor := make(map[uuid.UUID][]db.DailyStat, len(monitors))
+	for _, s := range allStats {
+		statsByMonitor[s.MonitorID] = append(statsByMonitor[s.MonitorID], s)
+	}
+
 	resp := monitorsResponse{
 		IntervalSeconds: int(a.interval.Seconds()),
 		Days:            days,
 		Monitors:        make([]monitorResponse, 0, len(monitors)),
 	}
 	for _, m := range monitors {
-		mr, err := a.buildMonitorResponse(r.Context(), m, days)
-		if err != nil {
-			writeInternalError(w, err)
-			return
-		}
+		mr := a.buildMonitorResponseFromStats(m, days, today, statsByMonitor[m.ID])
 		resp.Monitors = append(resp.Monitors, mr)
 	}
 
@@ -326,6 +339,20 @@ func (a *api) handleCheckAllMonitors(w http.ResponseWriter, r *http.Request) {
 // including its uptime percentage and per-day history for the last days
 // days (oldest first), filling in gaps with "none" days.
 func (a *api) buildMonitorResponse(ctx context.Context, m db.Monitor, days int) (monitorResponse, error) {
+	today := time.Now().In(a.loc)
+	since := today.AddDate(0, 0, -(days - 1))
+
+	stats, err := a.store.ListDailyStatsSince(ctx, m.ID, since)
+	if err != nil {
+		return monitorResponse{}, err
+	}
+	return a.buildMonitorResponseFromStats(m, days, today, stats), nil
+}
+
+// buildMonitorResponseFromStats does the actual assembly: it's pure (no I/O),
+// so both buildMonitorResponse (one monitor, its own query) and
+// handleListMonitors (every monitor, one shared batched query) can use it.
+func (a *api) buildMonitorResponseFromStats(m db.Monitor, days int, today time.Time, stats []db.DailyStat) monitorResponse {
 	resp := monitorResponse{
 		ID:          m.ID.String(),
 		Name:        m.Name,
@@ -347,13 +374,6 @@ func (a *api) buildMonitorResponse(ctx context.Context, m db.Monitor, days int) 
 		resp.Commit = &m.LastCommit.String
 	}
 
-	today := time.Now().In(a.loc)
-	since := today.AddDate(0, 0, -(days - 1))
-
-	stats, err := a.store.ListDailyStatsSince(ctx, m.ID, since)
-	if err != nil {
-		return monitorResponse{}, err
-	}
 	byDate := make(map[string]db.DailyStat, len(stats))
 	for _, s := range stats {
 		// Day is a date-only value stored/read as midnight UTC; format it
@@ -389,7 +409,7 @@ func (a *api) buildMonitorResponse(ctx context.Context, m db.Monitor, days int) 
 	resp.UptimePercent = monitor.Uptime(totalDown, totalDegraded, daysWithData)
 	resp.History = history
 
-	return resp, nil
+	return resp
 }
 
 func parseMonitorID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
