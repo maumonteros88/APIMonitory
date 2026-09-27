@@ -7,12 +7,14 @@
 	} from '$env/static/public';
 	import {
 		UnauthorizedError,
+		applyMonitorDelta,
 		checkAllMonitors,
 		checkMonitor,
 		createMonitor,
 		deleteMonitor,
 		fetchMonitors,
 		mergeMonitors,
+		mergeRecentMonitors,
 		onUnauthorized,
 		probeToken,
 		subscribeToMonitorEvents,
@@ -31,7 +33,12 @@
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import TokenGate from '$lib/components/TokenGate.svelte';
 
-	// The poll is now just a reconciliation safety net: real-time updates
+	// The poll is now just a reconciliation safety net, and as of the
+	// recent-history change it only fetches each monitor's last couple of
+	// days (see pollRecent) instead of the full 90 -- self-healing for
+	// anything older than that comes from the full resync on SSE reconnect
+	// (the streamDropped latch in startEvents) and from needsResync
+	// escalating any detected gap back to loadMonitors(). Real-time updates
 	// come from the SSE stream (see startEvents), which drops a subscriber
 	// that can't keep up rather than losing events silently, and the events
 	// connection is closed and fully reloaded on tab visibility changes --
@@ -86,6 +93,17 @@
 	let nowTickHandle: ReturnType<typeof setInterval> | undefined;
 	let eventsClose: (() => void) | null = null;
 	let hiddenTeardownHandle: ReturnType<typeof setTimeout> | undefined;
+	// Shared across every caller that wants a full 90-day resync (initial
+	// load, token gate, visibility recovery, a needsResync escalation from
+	// the recent poll or an SSE delta) so concurrent callers around the same
+	// moment share one request instead of firing one each.
+	let fullSyncInFlight: Promise<void> | null = null;
+	// Set on the first onConnectionChange(false) after a connection is
+	// (re)established, cleared on the first onConnectionChange(true) that
+	// follows -- so exactly that first reconnect signal (not every 25s
+	// heartbeat) triggers a full resync, covering whatever the client missed
+	// while the stream was down.
+	let streamDropped = false;
 
 	function applyTheme(next: 'light' | 'dark') {
 		theme = next;
@@ -110,7 +128,7 @@
 		}
 	}
 
-	async function loadMonitors() {
+	async function fullSync() {
 		try {
 			const res = await fetchMonitors(90);
 			// A merge, not a blind replace: a slow poll response can resolve
@@ -127,9 +145,53 @@
 		}
 	}
 
+	// The full 90-day resync. Every caller keeps calling this (not fullSync
+	// directly): it's the same signature/behavior, just deduplicated so
+	// several resync triggers around the same moment (e.g. an SSE reconnect
+	// right after the recent-poll already spotted a gap) share one request.
+	function loadMonitors(): Promise<void> {
+		fullSyncInFlight ??= fullSync().finally(() => {
+			fullSyncInFlight = null;
+		});
+		return fullSyncInFlight;
+	}
+
+	// The 60s poll's own path: fetches only each monitor's last couple of
+	// days instead of the full 90, falling back to a full resync whenever
+	// the delta can't be merged safely. Skips entirely while a full sync is
+	// already in flight, so it never races a resync some other caller
+	// already triggered.
+	async function pollRecent() {
+		if (fullSyncInFlight) return;
+		try {
+			const res = await fetchMonitors(90, 'recent');
+			if (res.history === 'recent') {
+				const result = mergeRecentMonitors(monitors, res.monitors);
+				monitors = result.monitors;
+				if (result.needsResync) {
+					await loadMonitors();
+					return;
+				}
+			} else {
+				// Defensive: the server is expected to always honor
+				// history=recent, but if it ever answers full anyway, merge
+				// it the same way loadMonitors does instead of feeding a
+				// 90-day response through the delta path.
+				monitors = mergeMonitors(monitors, res.monitors);
+			}
+			intervalSeconds = res.intervalSeconds;
+			hasLoadedOnce = true;
+			lastSuccessAt = Date.now();
+		} catch (err) {
+			if (err instanceof UnauthorizedError) return;
+			console.error('failed to poll monitors', err);
+			lastFailureAt = Date.now();
+		}
+	}
+
 	function startPolling() {
 		stopPolling();
-		pollHandle = setInterval(loadMonitors, POLL_MS);
+		pollHandle = setInterval(pollRecent, POLL_MS);
 	}
 
 	function stopPolling() {
@@ -142,14 +204,28 @@
 	// The (much slower) poll above stays on as a reconciliation backstop.
 	function startEvents() {
 		stopEvents();
+		streamDropped = false;
 		eventsClose = subscribeToMonitorEvents(
 			(m) => {
-				monitors = upsertMonitor(monitors, m);
+				const result = applyMonitorDelta(monitors, m);
+				monitors = result.monitors;
+				if (result.needsResync) loadMonitors();
 				lastSuccessAt = Date.now();
 			},
 			(ok) => {
-				if (ok) lastSuccessAt = Date.now();
-				else lastFailureAt = Date.now();
+				if (ok) {
+					// Only the first reconnect signal after a drop repairs
+					// whatever the client missed while disconnected -- not
+					// every 25s heartbeat that follows.
+					if (streamDropped) {
+						streamDropped = false;
+						loadMonitors();
+					}
+					lastSuccessAt = Date.now();
+				} else {
+					streamDropped = true;
+					lastFailureAt = Date.now();
+				}
 			}
 		);
 	}

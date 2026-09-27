@@ -32,6 +32,7 @@ export interface Monitor {
 export interface MonitorsResponse {
 	intervalSeconds: number;
 	days: number;
+	history: 'full' | 'recent';
 	monitors: Monitor[];
 }
 
@@ -134,8 +135,90 @@ export function mergeMonitors(current: Monitor[], fetched: Monitor[]): Monitor[]
 	});
 }
 
-export function fetchMonitors(days = 90): Promise<MonitorsResponse> {
-	return request<MonitorsResponse>(`/api/monitors?days=${days}`);
+export interface MergeResult {
+	monitors: Monitor[];
+	needsResync: boolean;
+}
+
+/** Returns the calendar day after date (a "YYYY-MM-DD" string), via UTC
+ * string arithmetic -- the client never derives "today" from the browser's
+ * own clock/timezone, only from dates the server already sent. */
+function nextDay(date: string): string {
+	const d = new Date(`${date}T00:00:00Z`);
+	d.setUTCDate(d.getUTCDate() + 1);
+	return d.toISOString().slice(0, 10);
+}
+
+/** Applies one delta update -- an SSE "monitor" frame or a `history: 'recent'`
+ * fetchMonitors entry, whose history is only the last couple of days,
+ * not the monitor's full window -- onto list. Unlike upsertMonitor, this
+ * can't just replace the existing entry outright: update.history has to be
+ * merged day-by-day into the existing window instead.
+ *
+ * needsResync is true whenever that merge can't be done safely: an unknown
+ * monitor id, or a delta whose first date isn't already present in the
+ * existing entry's history, or whose next dates are each neither already
+ * present nor exactly the day after the window's current last date. Any of
+ * those means the local window and the delta don't provably line up (a
+ * missed event, a sleep/reconnect gap, a day skipped entirely), and the
+ * caller is expected to fall back to a full resync (loadMonitors) instead of
+ * risking a gap or a duplicate date in the history array. */
+export function applyMonitorDelta(list: Monitor[], update: Monitor): MergeResult {
+	const index = list.findIndex((existing) => existing.id === update.id);
+	if (index === -1) return { monitors: list, needsResync: true };
+
+	const existing = list[index];
+	if (isOlder(update.lastCheck, existing.lastCheck)) {
+		return { monitors: list, needsResync: false };
+	}
+	if (!existing.history.some((d) => d.date === update.history[0].date)) {
+		return { monitors: list, needsResync: true };
+	}
+
+	let history = existing.history;
+	for (const day of update.history) {
+		const dayIndex = history.findIndex((d) => d.date === day.date);
+		if (dayIndex !== -1) {
+			history = history.map((d, i) => (i === dayIndex ? day : d));
+			continue;
+		}
+		if (day.date !== nextDay(history[history.length - 1].date)) {
+			return { monitors: list, needsResync: true };
+		}
+		// Window length never changes: a genuinely new day slides it forward
+		// by dropping the oldest entry instead of growing the array.
+		history = [...history.slice(1), day];
+	}
+
+	const merged: Monitor = { ...update, history };
+	return { monitors: list.map((m, i) => (i === index ? merged : m)), needsResync: false };
+}
+
+/** The `history: 'recent'` counterpart to mergeMonitors: applies a
+ * fetchMonitors(days, 'recent') response by running applyMonitorDelta per
+ * monitor still present in fetched, and dropping any monitor missing from it
+ * (deleted server-side, same as mergeMonitors). If any single delta
+ * needsResync -- including a fetched monitor unknown locally, e.g. one
+ * created between polls -- the whole thing is discarded and current is
+ * returned untouched: partially applying some monitors while leaving others
+ * to a full resync would leave the list in a mixed state the caller's own
+ * loadMonitors() should replace wholesale instead. */
+export function mergeRecentMonitors(current: Monitor[], fetched: Monitor[]): MergeResult {
+	const fetchedIds = new Set(fetched.map((m) => m.id));
+	let monitors = current.filter((m) => fetchedIds.has(m.id));
+
+	for (const update of fetched) {
+		const result = applyMonitorDelta(monitors, update);
+		if (result.needsResync) return { monitors: current, needsResync: true };
+		monitors = result.monitors;
+	}
+
+	return { monitors, needsResync: false };
+}
+
+export function fetchMonitors(days = 90, history: 'full' | 'recent' = 'full'): Promise<MonitorsResponse> {
+	const historyParam = history === 'recent' ? '&history=recent' : '';
+	return request<MonitorsResponse>(`/api/monitors?days=${days}${historyParam}`);
 }
 
 /** Probes a candidate token before it's persisted: on 401 it throws without
@@ -173,10 +256,11 @@ export function checkAllMonitors(): Promise<void> {
 const EVENTS_RETRY_MS = 3000;
 
 /** Subscribes to GET /api/events: onMonitor fires once per "monitor" frame
- * (a full Monitor, same shape a fetchMonitors entry has), and
- * onConnectionChange(true) fires on any frame at all (including the
- * periodic heartbeat comment) as a liveness signal, onConnectionChange(false)
- * when the connection drops.
+ * (a Monitor whose history is trimmed to just its last couple of days --
+ * every other field is the monitor's full current state; merge it with
+ * applyMonitorDelta, not upsertMonitor), and onConnectionChange(true) fires
+ * on any frame at all (including the periodic heartbeat comment) as a
+ * liveness signal, onConnectionChange(false) when the connection drops.
  *
  * Deliberately fetch + a hand-rolled parser instead of the browser's native
  * EventSource: EventSource can't set the Authorization header, and it can't
