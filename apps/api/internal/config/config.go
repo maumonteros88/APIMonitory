@@ -17,6 +17,7 @@ type Config struct {
 	FailureThreshold int
 	DegradedLatency  time.Duration
 	MaxConcurrency   int
+	SSEHeartbeat     time.Duration
 	AppTimezone      *time.Location
 	DatabaseURL      string
 	APIToken         string
@@ -78,6 +79,17 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("MAX_CONCURRENCY must be >= 1, got %d", maxConcurrency)
 	}
 	cfg.MaxConcurrency = maxConcurrency
+
+	// Below a typical ALB's default 60s idle timeout, so a deployment behind
+	// one doesn't need any extra configuration for /api/events to survive.
+	sseHeartbeat, err := durationEnv("SSE_HEARTBEAT", "25s")
+	if err != nil {
+		return Config{}, err
+	}
+	if sseHeartbeat <= 0 {
+		return Config{}, fmt.Errorf("SSE_HEARTBEAT must be positive, got %s", sseHeartbeat)
+	}
+	cfg.SSEHeartbeat = sseHeartbeat
 
 	tz := stringEnv("APP_TIMEZONE", "America/Argentina/Buenos_Aires")
 	loc, err := time.LoadLocation(tz)

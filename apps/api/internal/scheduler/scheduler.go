@@ -18,6 +18,16 @@ import (
 	"apimonitory/internal/store/db"
 )
 
+// Notifier is told about every check whose result was durably persisted, so
+// something else (an SSE hub, say) can push it onward. It's a narrow, local
+// interface rather than a dependency on any specific package: the concrete
+// notifier lives in httpapi, which itself depends on this package's
+// Scheduler type, so Scheduler can't depend back on httpapi without a
+// cycle.
+type Notifier interface {
+	MonitorChecked(ctx context.Context, id uuid.UUID)
+}
+
 // Scheduler periodically probes every monitor and also supports on-demand
 // manual checks triggered by the HTTP API.
 //
@@ -31,8 +41,9 @@ import (
 // already in flight for that monitor, the manual check is skipped too and
 // simply returns the monitor's current state.
 type Scheduler struct {
-	store   *store.Store
-	checker *checker.Checker
+	store    *store.Store
+	checker  *checker.Checker
+	notifier Notifier
 
 	interval         time.Duration
 	retryDelay       time.Duration
@@ -45,11 +56,12 @@ type Scheduler struct {
 }
 
 // New builds a Scheduler wired to the given store and checker, configured
-// from cfg.
-func New(s *store.Store, c *checker.Checker, cfg config.Config) *Scheduler {
+// from cfg. notifier is told about every successfully persisted check.
+func New(s *store.Store, c *checker.Checker, cfg config.Config, notifier Notifier) *Scheduler {
 	return &Scheduler{
 		store:            s,
 		checker:          c,
+		notifier:         notifier,
 		interval:         cfg.CheckInterval,
 		retryDelay:       cfg.RetryDelay,
 		failureThreshold: cfg.FailureThreshold,
@@ -191,7 +203,9 @@ func (s *Scheduler) probeAndPersist(ctx context.Context, m db.Monitor, scheduled
 	})
 	if err != nil {
 		slog.Warn("scheduler: failed to persist check attempt", "monitor_id", m.ID, "error", err)
+		return
 	}
+	s.notifier.MonitorChecked(ctx, m.ID)
 }
 
 // acquireSem blocks for a concurrency slot, returning false if ctx is

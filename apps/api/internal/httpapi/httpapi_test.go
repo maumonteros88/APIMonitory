@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"apimonitory/internal/events"
 	"apimonitory/internal/store"
 	"apimonitory/internal/store/db"
 )
@@ -89,7 +90,11 @@ func (fakeScheduler) IsChecking(uuid.UUID) bool { return false }
 const testToken = "test-token"
 
 func newTestMux(s *fakeStore) *http.ServeMux {
-	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+	return newTestMuxWithHub(s, events.NewHub())
+}
+
+func newTestMuxWithHub(s *fakeStore, hub *events.Hub) *http.ServeMux {
+	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, hub, time.Millisecond*20)
 }
 
 // authedRequest builds a request carrying the shared-secret bearer token, as
@@ -197,7 +202,7 @@ func TestDeleteMonitor_InvalidID(t *testing.T) {
 func TestDeleteMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20)
 
 	req := authedRequest(http.MethodDelete, "/api/monitors/"+created.ID.String(), nil)
 	rec := httptest.NewRecorder()
@@ -211,7 +216,7 @@ func TestDeleteMonitor_Success(t *testing.T) {
 func TestUpdateMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "old desc", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20)
 
 	req := authedRequest(
 		http.MethodPatch,
@@ -236,7 +241,7 @@ func TestUpdateMonitor_Success(t *testing.T) {
 func TestUpdateMonitor_EmptyName(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20)
 
 	req := authedRequest(
 		http.MethodPatch,

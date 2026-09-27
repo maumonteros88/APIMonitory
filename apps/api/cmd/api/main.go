@@ -15,6 +15,7 @@ import (
 
 	"apimonitory/internal/checker"
 	"apimonitory/internal/config"
+	"apimonitory/internal/events"
 	"apimonitory/internal/httpapi"
 	"apimonitory/internal/scheduler"
 	"apimonitory/internal/store"
@@ -59,7 +60,15 @@ func main() {
 	defer st.Close()
 
 	chk := checker.New(cfg.CheckTimeout)
-	sched := scheduler.New(st, chk, cfg)
+
+	// hub fans out check results to any open GET /api/events connections.
+	// publisher is built before sched: sched needs a Notifier at
+	// construction time, and httpapi.New (which would otherwise provide
+	// one via *api) itself needs sched already built -- Publisher only
+	// needs the store and the hub, so it breaks that cycle.
+	hub := events.NewHub()
+	publisher := httpapi.NewPublisher(st, cfg.AppTimezone, hub)
+	sched := scheduler.New(st, chk, cfg, publisher)
 
 	schedulerDone := make(chan struct{})
 	go func() {
@@ -67,7 +76,7 @@ func main() {
 		sched.Run(appCtx)
 	}()
 
-	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken)
+	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken, hub, cfg.SSEHeartbeat)
 
 	spa, err := webui.Handler()
 	if err != nil {
@@ -82,6 +91,13 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// Shutdown (below) waits for active connections to go idle on their
+	// own, and an open SSE stream never does. RegisterOnShutdown runs at
+	// the start of Shutdown -- unlike cancelApp, which only runs after it
+	// returns -- so closing the hub here is what actually lets those
+	// connections exit promptly instead of stalling the full
+	// shutdownCtx timeout below on every deploy.
+	srv.RegisterOnShutdown(hub.Close)
 
 	// Buffered so the goroutine can report a bind/serve failure and exit
 	// even if nothing is listening on the other end yet.

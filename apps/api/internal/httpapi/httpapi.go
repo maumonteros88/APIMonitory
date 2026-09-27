@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"apimonitory/internal/events"
 	"apimonitory/internal/monitor"
 	"apimonitory/internal/store"
 	"apimonitory/internal/store/db"
@@ -45,12 +46,14 @@ const defaultHistoryDays = 90
 
 // api holds the handlers' dependencies.
 type api struct {
-	store     Store
-	scheduler Scheduler
-	bgCtx     context.Context // base context for fire-and-forget background checks
-	interval  time.Duration
-	loc       *time.Location
-	token     string
+	store        Store
+	scheduler    Scheduler
+	bgCtx        context.Context // base context for fire-and-forget background checks
+	interval     time.Duration
+	loc          *time.Location
+	token        string
+	hub          *events.Hub
+	sseHeartbeat time.Duration
 }
 
 // New builds the API routes on a fresh http.ServeMux. bgCtx is used as the
@@ -59,13 +62,25 @@ type api struct {
 // abort cleanly. token is the shared secret required (as "Authorization:
 // Bearer <token>") on every /api/* route except /healthz: without it,
 // anyone with network access to the port could delete monitors (cascading,
-// irreversible) or create ones that get probed on a schedule.
-func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string) *http.ServeMux {
-	a := &api{store: s, scheduler: sched, bgCtx: bgCtx, interval: interval, loc: loc, token: token}
+// irreversible) or create ones that get probed on a schedule. hub feeds
+// GET /api/events; sseHeartbeat is how often that route sends a keep-alive
+// comment to hold the connection open through an idle-timeout proxy.
+func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string, hub *events.Hub, sseHeartbeat time.Duration) *http.ServeMux {
+	a := &api{
+		store:        s,
+		scheduler:    sched,
+		bgCtx:        bgCtx,
+		interval:     interval,
+		loc:          loc,
+		token:        token,
+		hub:          hub,
+		sseHeartbeat: sseHeartbeat,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.handleHealthz)
 	mux.Handle("GET /api/monitors", a.requireToken(a.handleListMonitors))
+	mux.Handle("GET /api/events", a.requireToken(a.handleEvents))
 	mux.Handle("POST /api/monitors", a.requireToken(a.handleCreateMonitor))
 	mux.Handle("POST /api/monitors/check", a.requireToken(a.handleCheckAllMonitors))
 	mux.Handle("PATCH /api/monitors/{id}", a.requireToken(a.handleUpdateMonitor))
@@ -175,7 +190,7 @@ func (a *api) handleListMonitors(w http.ResponseWriter, r *http.Request) {
 		Monitors:        make([]monitorResponse, 0, len(monitors)),
 	}
 	for _, m := range monitors {
-		mr := a.buildMonitorResponseFromStats(m, days, today, statsByMonitor[m.ID])
+		mr := buildMonitorResponseFromStats(m, days, today, statsByMonitor[m.ID], a.scheduler.IsChecking(m.ID))
 		resp.Monitors = append(resp.Monitors, mr)
 	}
 
@@ -346,20 +361,25 @@ func (a *api) buildMonitorResponse(ctx context.Context, m db.Monitor, days int) 
 	if err != nil {
 		return monitorResponse{}, err
 	}
-	return a.buildMonitorResponseFromStats(m, days, today, stats), nil
+	return buildMonitorResponseFromStats(m, days, today, stats, a.scheduler.IsChecking(m.ID)), nil
 }
 
-// buildMonitorResponseFromStats does the actual assembly: it's pure (no I/O),
-// so both buildMonitorResponse (one monitor, its own query) and
-// handleListMonitors (every monitor, one shared batched query) can use it.
-func (a *api) buildMonitorResponseFromStats(m db.Monitor, days int, today time.Time, stats []db.DailyStat) monitorResponse {
+// buildMonitorResponseFromStats does the actual assembly: it's pure (no I/O,
+// no dependency on *api), so buildMonitorResponse (one monitor, its own
+// query), handleListMonitors (every monitor, one shared batched query) and
+// Publisher.MonitorChecked (after a check completes, for the SSE hub) can
+// all use it. checking is passed in rather than read from a Scheduler here
+// on purpose: Publisher has no Scheduler to ask (see events.go), and always
+// means "false" for it anyway, since a MonitorChecked event by definition
+// means a check just finished.
+func buildMonitorResponseFromStats(m db.Monitor, days int, today time.Time, stats []db.DailyStat, checking bool) monitorResponse {
 	resp := monitorResponse{
 		ID:          m.ID.String(),
 		Name:        m.Name,
 		Description: m.Description,
 		URL:         m.Url,
 		Status:      m.Status,
-		Checking:    a.scheduler.IsChecking(m.ID),
+		Checking:    checking,
 	}
 
 	if m.LastCheckedAt.Valid {
