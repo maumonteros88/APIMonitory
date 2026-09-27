@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
+		PUBLIC_API_VERSION,
+		PUBLIC_GIT_COMMIT,
+		PUBLIC_WEB_VERSION
+	} from '$env/static/public';
+	import {
 		UnauthorizedError,
 		checkAllMonitors,
 		checkMonitor,
@@ -339,6 +344,10 @@
 				</div>
 			</section>
 		{/if}
+
+		<footer class="build-info">
+			Front v{PUBLIC_WEB_VERSION} · API v{PUBLIC_API_VERSION} · commit {PUBLIC_GIT_COMMIT}
+		</footer>
 	</div>
 {/if}
 
@@ -514,5 +523,12 @@
 
 	.empty-sub {
 		margin: 0;
+	}
+
+	.build-info {
+		text-align: center;
+		font-size: 12px;
+		color: var(--fg-3);
+		font-family: var(--font-mono);
 	}
 </style>

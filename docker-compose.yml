@@ -22,6 +22,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Set by `make up` from git; harmless "dev"/"0" fallback otherwise.
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
+        WEB_VERSION: ${WEB_VERSION:-0}
+        API_VERSION: ${API_VERSION:-0}
     ports:
       - "8080:8080"
     environment:

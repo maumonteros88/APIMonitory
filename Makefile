@@ -41,5 +41,10 @@ test:
 	pnpm -C apps/web test
 
 # Build and start the full stack (Postgres + API with the embedded frontend).
+# Each app's "version" is just how many commits have touched its folder --
+# it goes up on its own, with nothing to remember to bump.
 up:
+	GIT_COMMIT="$$(git rev-parse --short HEAD)" \
+	WEB_VERSION="$$(git rev-list --count HEAD -- apps/web)" \
+	API_VERSION="$$(git rev-list --count HEAD -- apps/api)" \
 	docker compose up --build

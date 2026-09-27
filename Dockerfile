@@ -5,6 +5,16 @@ FROM node:22-alpine AS web-build
 WORKDIR /repo
 RUN corepack enable
 
+# Build identity, computed on the host (the build context excludes .git) and
+# passed in as --build-arg. PUBLIC_-prefixed vars are picked up by SvelteKit's
+# $env/static/public and statically inlined into the built assets.
+ARG GIT_COMMIT=dev
+ARG WEB_VERSION=0
+ARG API_VERSION=0
+ENV PUBLIC_GIT_COMMIT=$GIT_COMMIT
+ENV PUBLIC_WEB_VERSION=$WEB_VERSION
+ENV PUBLIC_API_VERSION=$API_VERSION
+
 # Copy manifests first so `pnpm install` is cached independently of source changes.
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/web/package.json apps/web/package.json
