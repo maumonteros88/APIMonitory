@@ -16,6 +16,19 @@ export interface DayHistory {
 	fails: number;
 }
 
+export interface Incident {
+	state: 'down' | 'degraded';
+	start: string;
+	end: string;
+	ongoing: boolean;
+}
+
+export interface IncidentsResponse {
+	day: string;
+	incidents: Incident[];
+	partial: boolean;
+}
+
 export interface Monitor {
 	id: string;
 	name: string;
@@ -251,6 +264,29 @@ export function checkMonitor(id: string): Promise<Monitor> {
 
 export function checkAllMonitors(): Promise<void> {
 	return request<void>('/api/monitors/check', { method: 'POST' });
+}
+
+export function fetchIncidents(id: string, day: string): Promise<IncidentsResponse> {
+	return request<IncidentsResponse>(`/api/monitors/${id}/incidents?day=${day}`);
+}
+
+const incidentsCache = new Map<string, Promise<IncidentsResponse>>();
+
+/** Caches fetchIncidents by `id|day|checks` -- checks (the day's check count,
+ * from the matching DayHistory entry) changes every time a new scheduled
+ * check lands for a day still in progress (via SSE or the recent-history
+ * poll), so a past day's entry is cached forever while today's key naturally
+ * busts itself as new checks arrive. A rejected promise is evicted instead
+ * of cached, so a transient failure doesn't poison the cache forever. */
+export function fetchIncidentsCached(id: string, day: string, checks: number): Promise<IncidentsResponse> {
+	const key = `${id}|${day}|${checks}`;
+	const cached = incidentsCache.get(key);
+	if (cached) return cached;
+
+	const promise = fetchIncidents(id, day);
+	incidentsCache.set(key, promise);
+	promise.catch(() => incidentsCache.delete(key));
+	return promise;
 }
 
 const EVENTS_RETRY_MS = 3000;

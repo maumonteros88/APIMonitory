@@ -5,6 +5,7 @@ import {
 	errorLabel,
 	fmtDate,
 	fmtMins,
+	fmtTime,
 	statusMeta,
 	tileStyle,
 	uptimeLabel,
@@ -40,6 +41,16 @@ describe('fmtMins', () => {
 
 	it('formats hours with a minute remainder', () => {
 		expect(fmtMins(1215)).toBe('20 h 15 min');
+	});
+});
+
+describe('fmtTime', () => {
+	it('extracts HH:MM from a backend-formatted RFC3339 string', () => {
+		expect(fmtTime('2026-09-26T14:32:00-03:00')).toBe('14:32');
+	});
+
+	it('does not depend on the offset (the backend already picked APP_TIMEZONE)', () => {
+		expect(fmtTime('2026-09-26T14:32:00-03:00')).toBe(fmtTime('2026-09-26T14:32:00+09:00'));
 	});
 });
 

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	applyMonitorDelta,
+	fetchIncidentsCached,
 	mergeMonitors,
 	mergeRecentMonitors,
 	upsertMonitor,
@@ -244,6 +245,52 @@ describe('applyMonitorDelta', () => {
 		const result = applyMonitorDelta(current, update);
 
 		expect(result.needsResync).toBe(false);
+	});
+});
+
+describe('fetchIncidentsCached', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('reuses the cached promise for the same id|day|checks key instead of refetching', async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ day: '2026-01-02', incidents: [], partial: false }), {
+					status: 200
+				})
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const [a, b] = await Promise.all([
+			fetchIncidentsCached('monitor-cache', '2026-01-02', 3),
+			fetchIncidentsCached('monitor-cache', '2026-01-02', 3)
+		]);
+
+		expect(a).toEqual(b);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('evicts the entry on rejection, so a later call can succeed instead of repeating the same error forever', async () => {
+		let calls = 0;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => {
+				calls++;
+				if (calls === 1) throw new Error('network error');
+				return new Response(JSON.stringify({ day: '2026-01-03', incidents: [], partial: false }), {
+					status: 200
+				});
+			})
+		);
+
+		await expect(fetchIncidentsCached('monitor-evict', '2026-01-03', 1)).rejects.toThrow(
+			'network error'
+		);
+
+		const result = await fetchIncidentsCached('monitor-evict', '2026-01-03', 1);
+		expect(result).toEqual({ day: '2026-01-03', incidents: [], partial: false });
+		expect(calls).toBe(2);
 	});
 });
 

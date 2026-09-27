@@ -3,7 +3,7 @@
 	import { dayColor } from '$lib/format';
 	import DayTooltip from './DayTooltip.svelte';
 
-	let { history }: { history: DayHistory[] } = $props();
+	let { history, monitorId }: { history: DayHistory[]; monitorId: string } = $props();
 
 	let hoveredDate = $state<string | null>(null);
 	let tooltipPos = $state({ x: 0, y: 0 });
@@ -37,7 +37,7 @@
 </div>
 
 {#if hoveredDay}
-	<DayTooltip day={hoveredDay} x={tooltipPos.x} y={tooltipPos.y} />
+	<DayTooltip day={hoveredDay} x={tooltipPos.x} y={tooltipPos.y} {monitorId} />
 {/if}
 
 <style>

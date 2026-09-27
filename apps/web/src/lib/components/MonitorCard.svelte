@@ -51,7 +51,7 @@
 		</div>
 	</div>
 
-	<UptimeBars history={monitor.history} />
+	<UptimeBars history={monitor.history} monitorId={monitor.id} />
 
 	<div class="monitor-timeline-labels">
 		<span>Hace {monitor.history.length} días</span>

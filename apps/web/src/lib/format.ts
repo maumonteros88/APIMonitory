@@ -30,6 +30,15 @@ export function fmtMins(totalMinutes: number): string {
 	return `${hours} h ${remMin} min`;
 }
 
+/** Extracts "HH:MM" from an incident start/end timestamp. No `Intl` or
+ * `Date` involved on purpose: the backend already formats these in
+ * APP_TIMEZONE (see GET /api/monitors/{id}/incidents), so re-parsing them
+ * with the browser's own clock/timezone would be redundant at best and, for
+ * `APP_TIMEZONE=Local`, can throw a `RangeError` at worst. */
+export function fmtTime(iso: string): string {
+	return iso.slice(11, 16);
+}
+
 export function ago(iso: string, now: Date = new Date()): string {
 	const then = new Date(iso);
 	const diffSec = Math.max(0, Math.floor((now.getTime() - then.getTime()) / 1000));
