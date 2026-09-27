@@ -13,17 +13,19 @@ import (
 )
 
 const insertCheck = `-- name: InsertCheck :exec
-insert into checks (monitor_id, success, http_status, latency_ms, error_kind, scheduled)
-values ($1, $2, $3, $4, $5, $6)
+insert into checks (monitor_id, success, http_status, latency_ms, error_kind, scheduled, status, checked_at)
+values ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertCheckParams struct {
-	MonitorID  uuid.UUID   `db:"monitor_id" json:"monitor_id"`
-	Success    bool        `db:"success" json:"success"`
-	HttpStatus pgtype.Int4 `db:"http_status" json:"http_status"`
-	LatencyMs  pgtype.Int4 `db:"latency_ms" json:"latency_ms"`
-	ErrorKind  pgtype.Text `db:"error_kind" json:"error_kind"`
-	Scheduled  bool        `db:"scheduled" json:"scheduled"`
+	MonitorID  uuid.UUID          `db:"monitor_id" json:"monitor_id"`
+	Success    bool               `db:"success" json:"success"`
+	HttpStatus pgtype.Int4        `db:"http_status" json:"http_status"`
+	LatencyMs  pgtype.Int4        `db:"latency_ms" json:"latency_ms"`
+	ErrorKind  pgtype.Text        `db:"error_kind" json:"error_kind"`
+	Scheduled  bool               `db:"scheduled" json:"scheduled"`
+	Status     pgtype.Text        `db:"status" json:"status"`
+	CheckedAt  pgtype.Timestamptz `db:"checked_at" json:"checked_at"`
 }
 
 func (q *Queries) InsertCheck(ctx context.Context, arg InsertCheckParams) error {
@@ -34,6 +36,46 @@ func (q *Queries) InsertCheck(ctx context.Context, arg InsertCheckParams) error 
 		arg.LatencyMs,
 		arg.ErrorKind,
 		arg.Scheduled,
+		arg.Status,
+		arg.CheckedAt,
 	)
 	return err
+}
+
+const listScheduledChecksBetween = `-- name: ListScheduledChecksBetween :many
+select checked_at, status from checks
+where monitor_id = $1 and scheduled
+  and checked_at >= $2 and checked_at < $3
+order by checked_at asc
+`
+
+type ListScheduledChecksBetweenParams struct {
+	MonitorID uuid.UUID          `db:"monitor_id" json:"monitor_id"`
+	FromAt    pgtype.Timestamptz `db:"from_at" json:"from_at"`
+	ToAt      pgtype.Timestamptz `db:"to_at" json:"to_at"`
+}
+
+type ListScheduledChecksBetweenRow struct {
+	CheckedAt pgtype.Timestamptz `db:"checked_at" json:"checked_at"`
+	Status    pgtype.Text        `db:"status" json:"status"`
+}
+
+func (q *Queries) ListScheduledChecksBetween(ctx context.Context, arg ListScheduledChecksBetweenParams) ([]ListScheduledChecksBetweenRow, error) {
+	rows, err := q.db.Query(ctx, listScheduledChecksBetween, arg.MonitorID, arg.FromAt, arg.ToAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListScheduledChecksBetweenRow
+	for rows.Next() {
+		var i ListScheduledChecksBetweenRow
+		if err := rows.Scan(&i.CheckedAt, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

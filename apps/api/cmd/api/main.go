@@ -76,7 +76,16 @@ func main() {
 		sched.Run(appCtx)
 	}()
 
-	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken, hub, cfg.SSEHeartbeat)
+	// maxGap bounds how far apart two scheduled checks can be before
+	// buildIncidents treats the gap itself as a break in a down/degraded run
+	// (the scheduler wasn't necessarily down for that whole gap, it just
+	// didn't run): a retried check (probe + RetryDelay + retry probe) can
+	// already take close to 2*CheckInterval on its own, and a tick skipped
+	// because a manual check was in flight for that monitor pushes it
+	// further still.
+	maxGap := 2*cfg.CheckInterval + cfg.RetryDelay + 2*cfg.CheckTimeout
+
+	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken, hub, cfg.SSEHeartbeat, maxGap)
 
 	spa, err := webui.Handler()
 	if err != nil {

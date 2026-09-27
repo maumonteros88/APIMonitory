@@ -270,3 +270,126 @@ func TestStore_ListAllDailyStatsSince(t *testing.T) {
 		t.Errorf("m2 down_seconds = %d, want 60", s2.DownSeconds)
 	}
 }
+
+// TestStore_RegisterAttempt_PersistsStatusAndCheckedAt guards the checks
+// columns the incidents endpoint depends on: status must round-trip, and
+// checked_at must be exactly a.Now (truncated to microseconds, since
+// timestamptz has no nanosecond precision) rather than whatever now() on the
+// server happened to be a few ms later.
+func TestStore_RegisterAttempt_PersistsStatusAndCheckedAt(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, created.ID)
+
+	loc, err := time.LoadLocation("America/Argentina/Buenos_Aires")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	now := time.Now().In(loc).Truncate(time.Microsecond).Add(123 * time.Nanosecond)
+
+	err = s.RegisterAttempt(ctx, Attempt{
+		MonitorID:     created.ID,
+		Result:        monitor.ProbeResult{Success: false, ErrorKind: "timeout"},
+		NewStatus:     monitor.StatusDown,
+		NewFailures:   2,
+		Scheduled:     true,
+		CheckInterval: 60 * time.Second,
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatalf("RegisterAttempt: %v", err)
+	}
+
+	rows, err := s.ListScheduledChecksBetween(ctx, created.ID, now.Add(-time.Minute), now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ListScheduledChecksBetween: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if !rows[0].Status.Valid || rows[0].Status.String != "down" {
+		t.Errorf("status = %+v, want down", rows[0].Status)
+	}
+	if !rows[0].CheckedAt.Time.Equal(now.Truncate(time.Microsecond)) {
+		t.Errorf("checked_at = %v, want %v", rows[0].CheckedAt.Time, now.Truncate(time.Microsecond))
+	}
+}
+
+// TestStore_ListScheduledChecksBetween_FiltersAndOrders guards the three
+// things buildIncidents relies on the query to already have done: manual
+// checks excluded, [from, to) bounds (inclusive start, exclusive end), and
+// ascending order by checked_at regardless of insertion order.
+func TestStore_ListScheduledChecksBetween_FiltersAndOrders(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, created.ID)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	attempt := func(offset time.Duration, scheduled bool) Attempt {
+		return Attempt{
+			MonitorID:     created.ID,
+			Result:        monitor.ProbeResult{Success: true, HTTPStatus: 200, LatencyMs: 10},
+			NewStatus:     monitor.StatusUp,
+			Scheduled:     scheduled,
+			CheckInterval: 60 * time.Second,
+			Now:           base.Add(offset),
+		}
+	}
+
+	// Inserted out of chronological order on purpose, to prove the query
+	// orders by checked_at rather than insertion order.
+	for _, a := range []Attempt{
+		attempt(2*time.Second, true),  // in range
+		attempt(0, true),              // exactly at from: included ([from,to))
+		attempt(-time.Second, true),   // before from: excluded
+		attempt(1*time.Second, false), // manual: excluded regardless of range
+		attempt(4*time.Second, true),  // exactly at to: excluded ([from,to))
+		attempt(3*time.Second, true),  // in range
+	} {
+		if err := s.RegisterAttempt(ctx, a); err != nil {
+			t.Fatalf("RegisterAttempt(offset): %v", err)
+		}
+	}
+
+	rows, err := s.ListScheduledChecksBetween(ctx, created.ID, base, base.Add(4*time.Second))
+	if err != nil {
+		t.Fatalf("ListScheduledChecksBetween: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3: %+v", len(rows), rows)
+	}
+	wantOffsets := []time.Duration{0, 2 * time.Second, 3 * time.Second}
+	for i, want := range wantOffsets {
+		if !rows[i].CheckedAt.Time.Equal(base.Add(want)) {
+			t.Errorf("rows[%d].CheckedAt = %v, want %v (ascending order)", i, rows[i].CheckedAt.Time, base.Add(want))
+		}
+	}
+}

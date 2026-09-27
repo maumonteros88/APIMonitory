@@ -18,6 +18,7 @@ type Check struct {
 	LatencyMs  pgtype.Int4        `db:"latency_ms" json:"latency_ms"`
 	ErrorKind  pgtype.Text        `db:"error_kind" json:"error_kind"`
 	Scheduled  bool               `db:"scheduled" json:"scheduled"`
+	Status     pgtype.Text        `db:"status" json:"status"`
 }
 
 type DailyStat struct {

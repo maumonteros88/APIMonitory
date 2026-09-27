@@ -25,6 +25,18 @@ type fakeStore struct {
 	monitors      map[uuid.UUID]db.Monitor
 	allDailyStats []db.DailyStat
 	dailyStats    map[uuid.UUID][]db.DailyStat // per-monitor override for ListDailyStatsSince
+	checks        map[uuid.UUID][]fakeCheck    // per-monitor fixture for ListScheduledChecksBetween
+}
+
+// fakeCheck is a fakeStore fixture row carrying the fields
+// ListScheduledChecksBetween filters on (monitor id via the map key,
+// scheduled, checked_at) plus the ones its result row exposes (checked_at,
+// status), so tests can seed unscheduled and out-of-range rows to prove the
+// filter actually excludes them rather than returning everything.
+type fakeCheck struct {
+	CheckedAt time.Time
+	Status    *string // nil means a NULL status (legacy pre-migration row)
+	Scheduled bool
 }
 
 func newFakeStore() *fakeStore {
@@ -80,6 +92,24 @@ func (f *fakeStore) ListAllDailyStatsSince(_ context.Context, _ time.Time) ([]db
 	return f.allDailyStats, nil
 }
 
+func (f *fakeStore) ListScheduledChecksBetween(_ context.Context, id uuid.UUID, from, to time.Time) ([]db.ListScheduledChecksBetweenRow, error) {
+	var out []db.ListScheduledChecksBetweenRow
+	for _, c := range f.checks[id] {
+		if !c.Scheduled || c.CheckedAt.Before(from) || !c.CheckedAt.Before(to) {
+			continue
+		}
+		status := pgtype.Text{}
+		if c.Status != nil {
+			status = pgtype.Text{String: *c.Status, Valid: true}
+		}
+		out = append(out, db.ListScheduledChecksBetweenRow{
+			CheckedAt: pgtype.Timestamptz{Time: c.CheckedAt, Valid: true},
+			Status:    status,
+		})
+	}
+	return out, nil
+}
+
 // fakeScheduler never performs real probes.
 type fakeScheduler struct{}
 
@@ -91,12 +121,17 @@ func (fakeScheduler) IsChecking(uuid.UUID) bool { return false }
 
 const testToken = "test-token"
 
+// testMaxGap mirrors the maxGap main.go computes from real config, just
+// large enough that ordinary test fixtures (checks a minute or so apart)
+// never trip the gap-breaks-a-run behavior incidental to these tests.
+const testMaxGap = 3 * time.Minute
+
 func newTestMux(s *fakeStore) *http.ServeMux {
 	return newTestMuxWithHub(s, events.NewHub())
 }
 
 func newTestMuxWithHub(s *fakeStore, hub *events.Hub) *http.ServeMux {
-	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, hub, time.Millisecond*20)
+	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, hub, time.Millisecond*20, testMaxGap)
 }
 
 // authedRequest builds a request carrying the shared-secret bearer token, as
@@ -204,7 +239,7 @@ func TestDeleteMonitor_InvalidID(t *testing.T) {
 func TestDeleteMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
 
 	req := authedRequest(http.MethodDelete, "/api/monitors/"+created.ID.String(), nil)
 	rec := httptest.NewRecorder()
@@ -218,7 +253,7 @@ func TestDeleteMonitor_Success(t *testing.T) {
 func TestUpdateMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "old desc", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
 
 	req := authedRequest(
 		http.MethodPatch,
@@ -243,7 +278,7 @@ func TestUpdateMonitor_Success(t *testing.T) {
 func TestUpdateMonitor_EmptyName(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
 
 	req := authedRequest(
 		http.MethodPatch,

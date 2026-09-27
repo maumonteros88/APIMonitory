@@ -33,6 +33,7 @@ type Store interface {
 	DeleteMonitor(ctx context.Context, id uuid.UUID) error
 	ListDailyStatsSince(ctx context.Context, id uuid.UUID, since time.Time) ([]db.DailyStat, error)
 	ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]db.DailyStat, error)
+	ListScheduledChecksBetween(ctx context.Context, id uuid.UUID, from, to time.Time) ([]db.ListScheduledChecksBetweenRow, error)
 }
 
 // Scheduler is the subset of the scheduler the HTTP API needs to trigger
@@ -63,6 +64,7 @@ type api struct {
 	token        string
 	hub          *events.Hub
 	sseHeartbeat time.Duration
+	maxGap       time.Duration
 }
 
 // New builds the API routes on a fresh http.ServeMux. bgCtx is used as the
@@ -73,8 +75,11 @@ type api struct {
 // anyone with network access to the port could delete monitors (cascading,
 // irreversible) or create ones that get probed on a schedule. hub feeds
 // GET /api/events; sseHeartbeat is how often that route sends a keep-alive
-// comment to hold the connection open through an idle-timeout proxy.
-func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string, hub *events.Hub, sseHeartbeat time.Duration) *http.ServeMux {
+// comment to hold the connection open through an idle-timeout proxy. maxGap
+// is how far apart two scheduled checks can be before handleIncidents treats
+// the gap itself as ending a down/degraded run (see main.go for how it's
+// computed).
+func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string, hub *events.Hub, sseHeartbeat time.Duration, maxGap time.Duration) *http.ServeMux {
 	a := &api{
 		store:        s,
 		scheduler:    sched,
@@ -84,6 +89,7 @@ func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration
 		token:        token,
 		hub:          hub,
 		sseHeartbeat: sseHeartbeat,
+		maxGap:       maxGap,
 	}
 
 	mux := http.NewServeMux()
@@ -95,6 +101,7 @@ func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration
 	mux.Handle("PATCH /api/monitors/{id}", a.requireToken(a.handleUpdateMonitor))
 	mux.Handle("DELETE /api/monitors/{id}", a.requireToken(a.handleDeleteMonitor))
 	mux.Handle("POST /api/monitors/{id}/check", a.requireToken(a.handleCheckMonitor))
+	mux.Handle("GET /api/monitors/{id}/incidents", a.requireToken(a.handleIncidents))
 	// Catches any /api/* request that didn't match a route above, so it
 	// never falls through to the SPA handler mounted at "/" and returns
 	// index.html for a typo'd or unsupported API path.

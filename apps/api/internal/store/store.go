@@ -138,6 +138,18 @@ func (s *Store) ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]
 	return s.queries.ListAllDailyStatsSince(ctx, pgtype.Date{Time: dayOf(since), Valid: true})
 }
 
+// ListScheduledChecksBetween returns the scheduled checks rows for a monitor
+// in [from, to), ascending by checked_at. Manual checks are excluded: they
+// don't count toward daily_stats, so they shouldn't surface as incidents
+// either (they'd inflate minutes the tooltip never showed).
+func (s *Store) ListScheduledChecksBetween(ctx context.Context, id uuid.UUID, from, to time.Time) ([]db.ListScheduledChecksBetweenRow, error) {
+	return s.queries.ListScheduledChecksBetween(ctx, db.ListScheduledChecksBetweenParams{
+		MonitorID: id,
+		FromAt:    pgtype.Timestamptz{Time: from, Valid: true},
+		ToAt:      pgtype.Timestamptz{Time: to, Valid: true},
+	})
+}
+
 // Attempt describes one completed probe attempt to persist.
 type Attempt struct {
 	MonitorID     uuid.UUID
@@ -192,6 +204,8 @@ func (s *Store) RegisterAttempt(ctx context.Context, a Attempt) error {
 		LatencyMs:  validInt4(a.Result.LatencyMs),
 		ErrorKind:  optionalText(a.Result.ErrorKind),
 		Scheduled:  a.Scheduled,
+		Status:     pgtype.Text{String: string(a.NewStatus), Valid: true},
+		CheckedAt:  pgtype.Timestamptz{Time: a.Now, Valid: true},
 	}); err != nil {
 		return err
 	}
