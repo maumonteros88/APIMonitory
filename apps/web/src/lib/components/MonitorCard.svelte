@@ -38,6 +38,9 @@
 			<h3>{monitor.name}</h3>
 			{#if monitor.description}<p class="monitor-desc">{monitor.description}</p>{/if}
 			<span class="monitor-url">{monitor.url}</span>
+			{#if monitor.commit}
+				<span class="monitor-commit" title={monitor.commit}>commit {monitor.commit.slice(0, 7)}</span>
+			{/if}
 		</div>
 		<div class="monitor-status">
 			<span class="status-line">
@@ -102,6 +105,14 @@
 	.monitor-url {
 		display: block;
 		margin-top: 4px;
+		font-size: 12px;
+		color: var(--fg-3);
+		font-family: var(--font-mono);
+	}
+
+	.monitor-commit {
+		display: block;
+		margin-top: 2px;
 		font-size: 12px;
 		color: var(--fg-3);
 		font-family: var(--font-mono);

@@ -24,6 +24,7 @@ export interface Monitor {
 	status: 'pending' | 'up' | 'degraded' | 'down';
 	checking: boolean;
 	lastCheck: LastCheck | null;
+	commit: string | null;
 	uptimePercent: number | null;
 	history: DayHistory[];
 }
