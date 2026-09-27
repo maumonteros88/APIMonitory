@@ -15,7 +15,7 @@ import (
 const createMonitor = `-- name: CreateMonitor :one
 insert into monitors (name, description, url)
 values ($1, $2, $3)
-returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit
 `
 
 type CreateMonitorParams struct {
@@ -39,6 +39,7 @@ func (q *Queries) CreateMonitor(ctx context.Context, arg CreateMonitorParams) (M
 		&i.LastLatencyMs,
 		&i.LastErrorKind,
 		&i.CreatedAt,
+		&i.LastCommit,
 	)
 	return i, err
 }
@@ -57,7 +58,7 @@ func (q *Queries) DeleteMonitor(ctx context.Context, id uuid.UUID) (int64, error
 }
 
 const getMonitor = `-- name: GetMonitor :one
-select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at from monitors
+select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit from monitors
 where id = $1
 `
 
@@ -76,12 +77,13 @@ func (q *Queries) GetMonitor(ctx context.Context, id uuid.UUID) (Monitor, error)
 		&i.LastLatencyMs,
 		&i.LastErrorKind,
 		&i.CreatedAt,
+		&i.LastCommit,
 	)
 	return i, err
 }
 
 const listMonitors = `-- name: ListMonitors :many
-select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at from monitors
+select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit from monitors
 order by created_at asc
 `
 
@@ -106,6 +108,7 @@ func (q *Queries) ListMonitors(ctx context.Context) ([]Monitor, error) {
 			&i.LastLatencyMs,
 			&i.LastErrorKind,
 			&i.CreatedAt,
+			&i.LastCommit,
 		); err != nil {
 			return nil, err
 		}
@@ -124,7 +127,8 @@ set status = $2,
     last_checked_at = $4,
     last_http_status = $5,
     last_latency_ms = $6,
-    last_error_kind = $7
+    last_error_kind = $7,
+    last_commit = $8
 where id = $1
 `
 
@@ -136,6 +140,7 @@ type UpdateMonitorAfterCheckParams struct {
 	LastHttpStatus      pgtype.Int4        `db:"last_http_status" json:"last_http_status"`
 	LastLatencyMs       pgtype.Int4        `db:"last_latency_ms" json:"last_latency_ms"`
 	LastErrorKind       pgtype.Text        `db:"last_error_kind" json:"last_error_kind"`
+	LastCommit          pgtype.Text        `db:"last_commit" json:"last_commit"`
 }
 
 func (q *Queries) UpdateMonitorAfterCheck(ctx context.Context, arg UpdateMonitorAfterCheckParams) (int64, error) {
@@ -147,6 +152,7 @@ func (q *Queries) UpdateMonitorAfterCheck(ctx context.Context, arg UpdateMonitor
 		arg.LastHttpStatus,
 		arg.LastLatencyMs,
 		arg.LastErrorKind,
+		arg.LastCommit,
 	)
 	if err != nil {
 		return 0, err
@@ -159,7 +165,7 @@ update monitors
 set name = $2,
     description = $3
 where id = $1
-returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit
 `
 
 type UpdateMonitorDetailsParams struct {
@@ -183,6 +189,7 @@ func (q *Queries) UpdateMonitorDetails(ctx context.Context, arg UpdateMonitorDet
 		&i.LastLatencyMs,
 		&i.LastErrorKind,
 		&i.CreatedAt,
+		&i.LastCommit,
 	)
 	return i, err
 }

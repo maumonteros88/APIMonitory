@@ -29,5 +29,6 @@ set status = $2,
     last_checked_at = $4,
     last_http_status = $5,
     last_latency_ms = $6,
-    last_error_kind = $7
+    last_error_kind = $7,
+    last_commit = $8
 where id = $1;

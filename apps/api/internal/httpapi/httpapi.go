@@ -114,6 +114,7 @@ type monitorResponse struct {
 	Status        string       `json:"status"`
 	Checking      bool         `json:"checking"`
 	LastCheck     *lastCheck   `json:"lastCheck"`
+	Commit        *string      `json:"commit"`
 	UptimePercent *float64     `json:"uptimePercent"`
 	History       []historyDay `json:"history"`
 }
@@ -341,6 +342,9 @@ func (a *api) buildMonitorResponse(ctx context.Context, m db.Monitor, days int) 
 			LatencyMs:  int(m.LastLatencyMs.Int32),
 			ErrorKind:  m.LastErrorKind.String,
 		}
+	}
+	if m.LastCommit.Valid {
+		resp.Commit = &m.LastCommit.String
 	}
 
 	today := time.Now().In(a.loc)

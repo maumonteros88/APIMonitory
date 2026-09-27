@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -16,6 +18,11 @@ import (
 
 	"apimonitory/internal/monitor"
 )
+
+// maxHealthBodyBytes bounds how much of a health response body is read when
+// looking for an optional "commit" field: enough for any reasonable health
+// payload, small enough to cap the cost of a malicious or oversized body.
+const maxHealthBodyBytes = 64 * 1024
 
 // errBlocked is returned by the dial guard when a connection targets a
 // disallowed address (cloud metadata endpoints, link-local, unspecified).
@@ -47,8 +54,9 @@ func New(timeout time.Duration) *Checker {
 	}
 }
 
-// Probe issues a GET request against target and classifies the result.
-// It never logs or returns the response body, only status code and latency.
+// Probe issues a GET request against target and classifies the result. On
+// success it also best-effort extracts a "commit" field (see readCommit);
+// the raw body is otherwise never logged or returned.
 func (c *Checker) Probe(ctx context.Context, target string) monitor.ProbeResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -72,6 +80,7 @@ func (c *Checker) Probe(ctx context.Context, target string) monitor.ProbeResult 
 			Success:    true,
 			HTTPStatus: resp.StatusCode,
 			LatencyMs:  latencyMs,
+			Commit:     readCommit(resp.Body),
 		}
 	}
 	return monitor.ProbeResult{
@@ -79,6 +88,21 @@ func (c *Checker) Probe(ctx context.Context, target string) monitor.ProbeResult 
 		LatencyMs:  latencyMs,
 		ErrorKind:  "http_status",
 	}
+}
+
+// readCommit best-effort extracts a "commit" field from a JSON health body.
+// It never fails the probe: an unparseable or oversized body, or a missing
+// field, simply yields "". The body is never otherwise logged or returned.
+func readCommit(body io.Reader) string {
+	data, _ := io.ReadAll(io.LimitReader(body, maxHealthBodyBytes))
+
+	var parsed struct {
+		Commit string `json:"commit"`
+	}
+	if json.Unmarshal(data, &parsed) != nil {
+		return ""
+	}
+	return parsed.Commit
 }
 
 // classifyError maps a request error to one of the documented ErrorKind

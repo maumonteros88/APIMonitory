@@ -20,6 +20,7 @@ type ProbeResult struct {
 	HTTPStatus int // 0 if no HTTP response was received
 	LatencyMs  int
 	ErrorKind  string // "" if Success; otherwise one of: timeout, dns, connection_refused, tls, http_status, blocked, other
+	Commit     string // best-effort "commit" field from a JSON body; "" if absent or unparseable
 }
 
 // Next computes the new status and new consecutive-failure count given the

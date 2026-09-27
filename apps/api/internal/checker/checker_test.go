@@ -26,6 +26,39 @@ func TestProbe_Success(t *testing.T) {
 	}
 }
 
+func TestProbe_SuccessWithCommit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"Healthy","version":"1.0.0","commit":"25c92cadf3b2f0820dff3f7ba99eaa6cc1d37eda"}`))
+	}))
+	defer srv.Close()
+
+	c := New(2 * time.Second)
+	result := c.Probe(context.Background(), srv.URL)
+
+	if result.Commit != "25c92cadf3b2f0820dff3f7ba99eaa6cc1d37eda" {
+		t.Errorf("Commit = %q, want the commit field from the body", result.Commit)
+	}
+}
+
+func TestProbe_SuccessWithoutCommit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	c := New(2 * time.Second)
+	result := c.Probe(context.Background(), srv.URL)
+
+	if !result.Success {
+		t.Fatalf("Success = false, want true")
+	}
+	if result.Commit != "" {
+		t.Errorf("Commit = %q, want empty for a non-JSON body", result.Commit)
+	}
+}
+
 func TestProbe_HTTPStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

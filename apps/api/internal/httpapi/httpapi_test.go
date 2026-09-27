@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"apimonitory/internal/store"
 	"apimonitory/internal/store/db"
@@ -270,6 +271,27 @@ func TestUpdateMonitor_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestListMonitors_IncludesCommit(t *testing.T) {
+	s := newFakeStore()
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	m := s.monitors[created.ID]
+	m.LastCommit = pgtype.Text{String: "abc1234", Valid: true}
+	s.monitors[created.ID] = m
+	mux := newTestMux(s)
+
+	req := authedRequest(http.MethodGet, "/api/monitors", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var got monitorsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.Monitors) != 1 || got.Monitors[0].Commit == nil || *got.Monitors[0].Commit != "abc1234" {
+		t.Fatalf("got monitors=%+v, want one monitor with commit=abc1234", got.Monitors)
 	}
 }
 

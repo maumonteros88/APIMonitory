@@ -168,6 +168,7 @@ func (s *Store) RegisterAttempt(ctx context.Context, a Attempt) error {
 		LastHttpStatus:      optionalInt4(a.Result.HTTPStatus),
 		LastLatencyMs:       validInt4(a.Result.LatencyMs),
 		LastErrorKind:       optionalText(a.Result.ErrorKind),
+		LastCommit:          optionalText(a.Result.Commit),
 	})
 	if err != nil {
 		return err

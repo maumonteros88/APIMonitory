@@ -41,4 +41,5 @@ type Monitor struct {
 	LastLatencyMs       pgtype.Int4        `db:"last_latency_ms" json:"last_latency_ms"`
 	LastErrorKind       pgtype.Text        `db:"last_error_kind" json:"last_error_kind"`
 	CreatedAt           pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	LastCommit          pgtype.Text        `db:"last_commit" json:"last_commit"`
 }

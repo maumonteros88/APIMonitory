@@ -126,3 +126,68 @@ func TestStore_UpdateMonitorDetails(t *testing.T) {
 		t.Errorf("UpdateMonitorDetails on missing id: err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestStore_RegisterAttempt_PersistsCommit(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, created.ID)
+
+	err = s.RegisterAttempt(ctx, Attempt{
+		MonitorID:     created.ID,
+		Result:        monitor.ProbeResult{Success: true, HTTPStatus: 200, LatencyMs: 50, Commit: "abc1234"},
+		NewStatus:     monitor.StatusUp,
+		NewFailures:   0,
+		Scheduled:     true,
+		CheckInterval: 60 * time.Second,
+		Now:           time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("RegisterAttempt: %v", err)
+	}
+
+	got, err := s.GetMonitor(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetMonitor: %v", err)
+	}
+	if !got.LastCommit.Valid || got.LastCommit.String != "abc1234" {
+		t.Errorf("last_commit = %+v, want abc1234", got.LastCommit)
+	}
+
+	// A subsequent failed attempt has no commit and clears the previous one,
+	// the same way last_http_status/last_error_kind already reflect only
+	// the latest attempt rather than the last successful one.
+	err = s.RegisterAttempt(ctx, Attempt{
+		MonitorID:     created.ID,
+		Result:        monitor.ProbeResult{Success: false, ErrorKind: "timeout"},
+		NewStatus:     monitor.StatusUp,
+		NewFailures:   1,
+		Scheduled:     true,
+		CheckInterval: 60 * time.Second,
+		Now:           time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("RegisterAttempt: %v", err)
+	}
+
+	got, err = s.GetMonitor(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetMonitor: %v", err)
+	}
+	if got.LastCommit.Valid {
+		t.Errorf("last_commit = %+v, want cleared after a commit-less attempt", got.LastCommit)
+	}
+}
