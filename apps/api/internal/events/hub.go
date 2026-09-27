@@ -62,9 +62,10 @@ func (h *Hub) Unsubscribe(ch chan Event) {
 
 // Publish sends ev to every current subscriber without blocking. A
 // subscriber that isn't keeping up (its buffer is full) is dropped and its
-// channel closed, rather than silently missing events forever: the
-// frontend's periodic reconciliation poll covers a dropped subscriber by
-// reconnecting and re-fetching full state.
+// channel closed, rather than silently missing events forever: the frontend
+// detects the drop and covers it with a full resync on reconnect, since its
+// own periodic poll only carries the last couple of days now and can't
+// repair older history on its own.
 func (h *Hub) Publish(ev Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

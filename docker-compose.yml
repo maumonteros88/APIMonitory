@@ -32,6 +32,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-apimonitory}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-apimonitory}?sslmode=disable
       API_TOKEN: ${API_TOKEN:?set API_TOKEN in .env}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Argentina/Buenos_Aires}
     depends_on:
       db:
         condition: service_healthy

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 type fakeStore struct {
 	monitors      map[uuid.UUID]db.Monitor
 	allDailyStats []db.DailyStat
+	dailyStats    map[uuid.UUID][]db.DailyStat // per-monitor override for ListDailyStatsSince
 }
 
 func newFakeStore() *fakeStore {
@@ -70,8 +72,8 @@ func (f *fakeStore) DeleteMonitor(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (f *fakeStore) ListDailyStatsSince(_ context.Context, _ uuid.UUID, _ time.Time) ([]db.DailyStat, error) {
-	return nil, nil
+func (f *fakeStore) ListDailyStatsSince(_ context.Context, id uuid.UUID, _ time.Time) ([]db.DailyStat, error) {
+	return f.dailyStats[id], nil
 }
 
 func (f *fakeStore) ListAllDailyStatsSince(_ context.Context, _ time.Time) ([]db.DailyStat, error) {
@@ -448,5 +450,122 @@ func TestHealthz_DoesNotRequireToken(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (healthz must stay open for load balancer probes)", rec.Code)
+	}
+}
+
+func TestListMonitors_NoHistoryParamDefaultsToFull(t *testing.T) {
+	s := newFakeStore()
+	if _, err := s.CreateMonitor(context.Background(), "My API", "", "https://example.com"); err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	mux := newTestMux(s)
+
+	req := authedRequest(http.MethodGet, "/api/monitors", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	var got monitorsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.History != "full" {
+		t.Errorf("History = %q, want full", got.History)
+	}
+	if len(got.Monitors) != 1 || len(got.Monitors[0].History) != defaultHistoryDays {
+		t.Fatalf("got %d monitors, want 1 with %d days of history", len(got.Monitors), defaultHistoryDays)
+	}
+}
+
+func TestListMonitors_InvalidHistory(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := authedRequest(http.MethodGet, "/api/monitors?history=foo", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestListMonitors_HistoryRecent guards the trimmed payload against the full
+// one: a history=recent response must be exactly the trailing
+// recentHistoryDays entries of the equivalent full response, with the same
+// uptimePercent (still computed over the full requested window), and it
+// must declare itself via the History field rather than leaving the client
+// to infer full vs. recent from the array length.
+func TestListMonitors_HistoryRecent(t *testing.T) {
+	s := newFakeStore()
+	created, err := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+
+	today := time.Now().UTC()
+	yesterday := today.AddDate(0, 0, -1)
+	s.allDailyStats = []db.DailyStat{
+		{MonitorID: created.ID, Day: pgtype.Date{Time: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC), Valid: true}, Checks: 1, DownSeconds: 60, Fails: 1},
+		{MonitorID: created.ID, Day: pgtype.Date{Time: time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC), Valid: true}, Checks: 1},
+	}
+	mux := newTestMux(s)
+
+	fullRec := httptest.NewRecorder()
+	mux.ServeHTTP(fullRec, authedRequest(http.MethodGet, "/api/monitors", nil))
+	var full monitorsResponse
+	if err := json.NewDecoder(fullRec.Body).Decode(&full); err != nil {
+		t.Fatalf("decode full response: %v", err)
+	}
+	if full.History != "full" || len(full.Monitors) != 1 || len(full.Monitors[0].History) != defaultHistoryDays {
+		t.Fatalf("full response = %+v, want history=full with 1 monitor and %d days", full, defaultHistoryDays)
+	}
+
+	recentRec := httptest.NewRecorder()
+	mux.ServeHTTP(recentRec, authedRequest(http.MethodGet, "/api/monitors?history=recent", nil))
+	var recent monitorsResponse
+	if err := json.NewDecoder(recentRec.Body).Decode(&recent); err != nil {
+		t.Fatalf("decode recent response: %v", err)
+	}
+	if recent.History != "recent" {
+		t.Errorf("History = %q, want recent", recent.History)
+	}
+	if len(recent.Monitors) != 1 {
+		t.Fatalf("got %d monitors, want 1", len(recent.Monitors))
+	}
+
+	wantHistory := full.Monitors[0].History[len(full.Monitors[0].History)-recentHistoryDays:]
+	if !reflect.DeepEqual(recent.Monitors[0].History, wantHistory) {
+		t.Errorf("recent history = %+v, want the last %d entries of the full response: %+v",
+			recent.Monitors[0].History, recentHistoryDays, wantHistory)
+	}
+	if recent.Monitors[0].UptimePercent == nil || full.Monitors[0].UptimePercent == nil ||
+		*recent.Monitors[0].UptimePercent != *full.Monitors[0].UptimePercent {
+		t.Errorf("uptimePercent mismatch: recent=%v, full=%v", recent.Monitors[0].UptimePercent, full.Monitors[0].UptimePercent)
+	}
+}
+
+// TestBuildMonitorResponseFromStats_TrimToRecentHistory_CutsInART is the
+// deterministic day-rollover check the plan calls for: "today" 22:30 in
+// America/Argentina/Buenos_Aires is already past midnight UTC, so a cut that
+// used the UTC calendar day (instead of the app's configured timezone) would
+// leak tomorrow's (empty) day into the trimmed window instead of today's.
+func TestBuildMonitorResponseFromStats_TrimToRecentHistory_CutsInART(t *testing.T) {
+	loc, err := time.LoadLocation("America/Argentina/Buenos_Aires")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	// 2026-09-26 22:30 ART == 2026-09-27 01:30 UTC.
+	today := time.Date(2026, 9, 26, 22, 30, 0, 0, loc)
+
+	mr := buildMonitorResponseFromStats(db.Monitor{ID: uuid.New(), Status: "up"}, defaultHistoryDays, today, nil, false)
+	trimmed := trimToRecentHistory(mr)
+
+	if len(trimmed.History) != recentHistoryDays {
+		t.Fatalf("len(History) = %d, want %d", len(trimmed.History), recentHistoryDays)
+	}
+	wantDates := []string{"2026-09-25", "2026-09-26"}
+	for i, want := range wantDates {
+		if trimmed.History[i].Date != want {
+			t.Errorf("History[%d].Date = %q, want %q (never 2026-09-27)", i, trimmed.History[i].Date, want)
+		}
 	}
 }

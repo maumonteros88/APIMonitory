@@ -20,8 +20,9 @@ import (
 const sseSubscriberCap = 100
 
 // handleEvents streams one "monitor" event per check that completes,
-// carrying that monitor's full public JSON shape (the same shape a REST
-// fetch would return), plus a periodic keep-alive comment. It never uses
+// carrying that monitor's public JSON shape with History trimmed to just
+// the last recentHistoryDays days (uptimePercent still reflects the full
+// window), plus a periodic keep-alive comment. It never uses
 // EventSource on the frontend side (see api.ts): the client authenticates
 // with the same Authorization header as every other route, so this goes
 // through the same requireToken middleware unchanged.
@@ -126,6 +127,7 @@ func (p *Publisher) MonitorChecked(ctx context.Context, id uuid.UUID) {
 	}
 
 	mr := buildMonitorResponseFromStats(m, defaultHistoryDays, today, stats, false)
+	mr = trimToRecentHistory(mr)
 	data, err := json.Marshal(mr)
 	if err != nil {
 		slog.Warn("httpapi: publisher failed to marshal monitor event", "monitor_id", id, "error", err)

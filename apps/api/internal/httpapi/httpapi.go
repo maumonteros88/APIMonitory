@@ -44,6 +44,15 @@ type Scheduler interface {
 
 const defaultHistoryDays = 90
 
+// recentHistoryDays is how many trailing days of history a "recent" list
+// response or an SSE event carries, instead of the full defaultHistoryDays:
+// a past day's daily_stats row never changes once its day ends (in
+// APP_TIMEZONE), so only the last recentHistoryDays days can still change
+// between polls/events. 2 (not 1) covers the day-rollover window: a check
+// imputed just before midnight can still complete just after it, so
+// yesterday's row can keep changing into the first moments of today.
+const recentHistoryDays = 2
+
 // api holds the handlers' dependencies.
 type api struct {
 	store        Store
@@ -119,6 +128,7 @@ func (a *api) handleHealthz(w http.ResponseWriter, r *http.Request) {
 type monitorsResponse struct {
 	IntervalSeconds int               `json:"intervalSeconds"`
 	Days            int               `json:"days"`
+	History         string            `json:"history"`
 	Monitors        []monitorResponse `json:"monitors"`
 }
 
@@ -162,6 +172,15 @@ func (a *api) handleListMonitors(w http.ResponseWriter, r *http.Request) {
 		days = n
 	}
 
+	history := "full"
+	if raw := r.URL.Query().Get("history"); raw != "" {
+		if raw != "full" && raw != "recent" {
+			writeError(w, http.StatusBadRequest, "El parámetro history debe ser full o recent")
+			return
+		}
+		history = raw
+	}
+
 	monitors, err := a.store.ListMonitors(r.Context())
 	if err != nil {
 		writeInternalError(w, err)
@@ -187,10 +206,14 @@ func (a *api) handleListMonitors(w http.ResponseWriter, r *http.Request) {
 	resp := monitorsResponse{
 		IntervalSeconds: int(a.interval.Seconds()),
 		Days:            days,
+		History:         history,
 		Monitors:        make([]monitorResponse, 0, len(monitors)),
 	}
 	for _, m := range monitors {
 		mr := buildMonitorResponseFromStats(m, days, today, statsByMonitor[m.ID], a.scheduler.IsChecking(m.ID))
+		if history == "recent" {
+			mr = trimToRecentHistory(mr)
+		}
 		resp.Monitors = append(resp.Monitors, mr)
 	}
 
@@ -430,6 +453,18 @@ func buildMonitorResponseFromStats(m db.Monitor, days int, today time.Time, stat
 	resp.History = history
 
 	return resp
+}
+
+// trimToRecentHistory keeps only the last recentHistoryDays entries of mr's
+// History (already built oldest-first, with "today" anchored to the app's
+// configured timezone), so a `history=recent` list response or an SSE event
+// carries only the days that can still change. uptimePercent is left as-is:
+// it was already computed over the full window the caller requested.
+func trimToRecentHistory(mr monitorResponse) monitorResponse {
+	if len(mr.History) > recentHistoryDays {
+		mr.History = mr.History[len(mr.History)-recentHistoryDays:]
+	}
+	return mr
 }
 
 func parseMonitorID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

@@ -103,7 +103,7 @@ func main() {
 	// even if nothing is listening on the other end yet.
 	serveErr := make(chan error, 1)
 	go func() {
-		slog.Info("starting server", "port", cfg.Port)
+		slog.Info("starting server", "port", cfg.Port, "timezone", cfg.AppTimezone.String())
 		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err

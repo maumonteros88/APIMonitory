@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"apimonitory/internal/events"
+	"apimonitory/internal/store/db"
 )
 
 // sseFrame reads one SSE frame (up to the blank line that terminates it)
@@ -225,6 +227,50 @@ func TestPublisher_MonitorChecked_PublishesWithCheckingFalse(t *testing.T) {
 			// must never say checking:true regardless of whether the
 			// scheduler's in-flight guard has been released yet.
 			t.Error("checking = true, want false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the published event")
+	}
+}
+
+// TestPublisher_MonitorChecked_TrimsHistoryToRecentDays guards the SSE
+// payload against the same 90-day leak the list endpoint's history=recent
+// mode avoids: a published event must carry only the last recentHistoryDays
+// days, even though it's built from (and its uptimePercent still reflects)
+// the full defaultHistoryDays window.
+func TestPublisher_MonitorChecked_TrimsHistoryToRecentDays(t *testing.T) {
+	s := newFakeStore()
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+
+	today := time.Now().UTC()
+	yesterday := today.AddDate(0, 0, -1)
+	s.dailyStats = map[uuid.UUID][]db.DailyStat{
+		created.ID: {
+			{MonitorID: created.ID, Day: pgtype.Date{Time: time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 0, 0, 0, 0, time.UTC), Valid: true}, Checks: 1},
+			{MonitorID: created.ID, Day: pgtype.Date{Time: time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC), Valid: true}, Checks: 1},
+		},
+	}
+
+	hub := events.NewHub()
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	p := NewPublisher(s, time.UTC, hub)
+	p.MonitorChecked(context.Background(), created.ID)
+
+	select {
+	case ev := <-ch:
+		var mr monitorResponse
+		if err := json.Unmarshal(ev.Data, &mr); err != nil {
+			t.Fatalf("unmarshal event data: %v", err)
+		}
+		if len(mr.History) != recentHistoryDays {
+			t.Fatalf("len(History) = %d, want %d", len(mr.History), recentHistoryDays)
+		}
+		wantYesterday := yesterday.Format("2006-01-02")
+		wantToday := today.Format("2006-01-02")
+		if mr.History[0].Date != wantYesterday || mr.History[1].Date != wantToday {
+			t.Errorf("history dates = %q, %q, want %q, %q", mr.History[0].Date, mr.History[1].Date, wantYesterday, wantToday)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for the published event")
