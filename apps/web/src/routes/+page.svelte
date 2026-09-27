@@ -85,6 +85,7 @@
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let nowTickHandle: ReturnType<typeof setInterval> | undefined;
 	let eventsClose: (() => void) | null = null;
+	let hiddenTeardownHandle: ReturnType<typeof setTimeout> | undefined;
 
 	function applyTheme(next: 'light' | 'dark') {
 		theme = next;
@@ -164,10 +165,29 @@
 	// around 6 over HTTP/1.1, and an SSE connection stays open indefinitely
 	// -- past a handful of background tabs, everything else (the poll, a
 	// manual check) would start hanging.
+	//
+	// But "hidden" fires on every quick alt-tab or window switch (on macOS,
+	// even the tab's own window getting occluded by another one), not just
+	// on a tab staying backgrounded for a while -- tearing the stream down
+	// immediately on every one of those turns this into a full reload plus
+	// a fresh connection each time, which for someone bouncing between
+	// windows moves *more* traffic than the poll this feature replaced.
+	// Debouncing the teardown means a quick round trip costs nothing: the
+	// stream was never actually closed, so there's nothing to reload.
+	const HIDDEN_TEARDOWN_MS = 90000;
+
 	function handleVisibilityChange() {
 		if (document.visibilityState === 'hidden') {
-			stopEvents();
-		} else if (authenticated) {
+			if (hiddenTeardownHandle) clearTimeout(hiddenTeardownHandle);
+			hiddenTeardownHandle = setTimeout(stopEvents, HIDDEN_TEARDOWN_MS);
+			return;
+		}
+
+		if (hiddenTeardownHandle) {
+			clearTimeout(hiddenTeardownHandle);
+			hiddenTeardownHandle = undefined;
+		}
+		if (authenticated && eventsClose === null) {
 			loadMonitors();
 			startEvents();
 		}
@@ -298,6 +318,7 @@
 			unsubscribe();
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			if (nowTickHandle) clearInterval(nowTickHandle);
+			if (hiddenTeardownHandle) clearTimeout(hiddenTeardownHandle);
 			stopPolling();
 			stopEvents();
 		};
