@@ -286,7 +286,7 @@ func (a *api) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 100 {
-		writeError(w, http.StatusBadRequest, "Ingresa un nombre para la API")
+		writeError(w, http.StatusBadRequest, "Ingresa un nombre para el monitor")
 		return
 	}
 	if !isValidMonitorURL(req.URL) {
@@ -389,7 +389,7 @@ func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 100 {
-		writeError(w, http.StatusBadRequest, "Ingresa un nombre para la API")
+		writeError(w, http.StatusBadRequest, "Ingresa un nombre para el monitor")
 		return
 	}
 
