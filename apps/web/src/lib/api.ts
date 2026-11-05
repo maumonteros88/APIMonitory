@@ -41,6 +41,8 @@ export interface Monitor {
 	description: string;
 	url: string;
 	service: string | null;
+	/** Optional owner of the service; a grouping level above it. */
+	company: string | null;
 	kind: MonitorKind;
 	environment: Environment | null;
 	status: 'pending' | 'up' | 'degraded' | 'down';
@@ -63,16 +65,18 @@ export interface NewMonitorInput {
 	url: string;
 	description: string;
 	service: string | null;
+	company?: string | null;
 	kind: MonitorKind;
 	environment: Environment | null;
 }
 
-/** PATCH body: a label left out keeps its stored value; null clears service
- * or environment. */
+/** PATCH body: a label left out keeps its stored value; null clears service,
+ * company or environment. */
 export interface MonitorDetailsInput {
 	name: string;
 	description: string;
 	service?: string | null;
+	company?: string | null;
 	kind?: MonitorKind;
 	environment?: Environment | null;
 }
@@ -268,6 +272,21 @@ export function updateMonitor(id: string, input: MonitorDetailsInput): Promise<M
 	return request<Monitor>(`/api/monitors/${id}`, {
 		method: 'PATCH',
 		body: JSON.stringify(input)
+	});
+}
+
+export interface ServiceCompanyResult {
+	service: string;
+	company: string | null;
+	/** How many monitors of the service were changed. */
+	updated: number;
+}
+
+/** Sets (or, with null, clears) the company of every monitor of a service. */
+export function assignServiceCompany(service: string, company: string | null): Promise<ServiceCompanyResult> {
+	return request<ServiceCompanyResult>('/api/services/company', {
+		method: 'PATCH',
+		body: JSON.stringify({ service, company })
 	});
 }
 

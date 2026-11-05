@@ -8,13 +8,17 @@
 	// opens the checkbox list, plus one removable chip per selected service.
 	let {
 		items,
+		grouped,
 		services,
 		onToggleService,
+		onToggleCompany,
 		onClearServices
 	}: {
 		items: ServiceFilterItem[];
+		grouped: boolean;
 		services: string[];
 		onToggleService: (key: string) => void;
+		onToggleCompany: (serviceKeys: string[]) => void;
 		onClearServices: () => void;
 	} = $props();
 
@@ -97,7 +101,7 @@
 		{#if open}
 			<div id={popoverId} class="popover" role="group" aria-label="Elegir servicios" bind:this={popover}>
 				<div class="popover-list">
-					<ServiceCheckList {items} onToggle={onToggleService} />
+					<ServiceCheckList {items} {grouped} onToggle={onToggleService} {onToggleCompany} />
 				</div>
 				<div class="popover-actions">
 					<button type="button" class="see-all" onclick={onClearServices}>Ver todos</button>

@@ -16,6 +16,7 @@ function makeMonitor(id: string, at: string | null, history: DayHistory[] = []):
 		description: '',
 		url: 'https://example.com',
 		service: null,
+		company: null,
 		kind: 'api',
 		environment: null,
 		status: 'up',

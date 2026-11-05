@@ -10,17 +10,21 @@
 		env,
 		envCounts,
 		items,
+		grouped,
 		services,
 		onEnvChange,
 		onToggleService,
+		onToggleCompany,
 		onClearServices
 	}: {
 		env: EnvFilter;
 		envCounts: Record<EnvFilter, number>;
 		items: ServiceFilterItem[];
+		grouped: boolean;
 		services: string[];
 		onEnvChange: (env: EnvFilter) => void;
 		onToggleService: (key: string) => void;
+		onToggleCompany: (serviceKeys: string[]) => void;
 		onClearServices: () => void;
 	} = $props();
 
@@ -32,7 +36,7 @@
 		<span id="{uid}-env" class="filter-label">Ambiente</span>
 		<EnvSwitch {env} counts={envCounts} labelledBy="{uid}-env" onChange={onEnvChange} />
 	</div>
-	<ServicePicker {items} {services} {onToggleService} {onClearServices} />
+	<ServicePicker {items} {grouped} {services} {onToggleService} {onToggleCompany} {onClearServices} />
 </div>
 
 <style>

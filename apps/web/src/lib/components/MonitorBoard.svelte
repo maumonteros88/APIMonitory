@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Environment, Monitor, MonitorKind } from '$lib/api';
+	import { groupByCompany, type CompanyIndex } from '$lib/companies';
 	import { ago, statusMeta, tileStyle, uptimeShort } from '$lib/format';
 	import {
 		ENV_LABELS,
@@ -8,10 +9,13 @@
 		buildBoard,
 		buildMatrix,
 		countLabel,
+		type BoardCard,
 		type EnvFilter,
+		type MatrixRow,
 		type Segment
 	} from '$lib/grouping';
 	import type { Period } from '$lib/period';
+	import AssignCompanyButton from './AssignCompanyButton.svelte';
 	import Icon from './Icon.svelte';
 	import PeriodSelect from './PeriodSelect.svelte';
 
@@ -19,25 +23,49 @@
 	// selected period's uptime. Under 'all' the board is a services ×
 	// environments matrix; otherwise one card per service. A missing kind or
 	// an empty cell offers onAdd, prefilled from where it was clicked.
+	// companies (built from every monitor, not just these) puts the services
+	// under company sections; while it is not enabled the board is exactly the
+	// plain one.
 	let {
 		monitors,
+		companies,
 		env,
 		days,
 		onDaysChange,
 		onCheck,
-		onAdd
+		onAdd,
+		onAssignCompany
 	}: {
 		monitors: Monitor[];
+		companies: CompanyIndex;
 		env: EnvFilter;
 		days: Period;
 		onDaysChange: (days: Period) => void;
 		onCheck: (id: string) => void;
 		onAdd: (service: string, kind: MonitorKind, environment: Environment) => void;
+		onAssignCompany: (service: string) => void;
 	} = $props();
 
 	const boardEnv = $derived(env === 'all' ? null : env);
 	const board = $derived(boardEnv ? buildBoard(monitors) : null);
 	const matrix = $derived(env === 'all' ? buildMatrix(monitors) : null);
+
+	function segmentCount(segments: Segment[]): number {
+		return segments.filter((seg) => seg.monitor !== null).length;
+	}
+
+	const boardLayout = $derived(
+		board && companies.enabled
+			? groupByCompany(board.cards, companies, (card) => segmentCount(card.segments))
+			: null
+	);
+	const matrixLayout = $derived(
+		matrix && companies.enabled
+			? groupByCompany(matrix.rows, companies, (row) =>
+					row.cells.reduce((sum, cell) => sum + segmentCount(cell.segments), 0)
+				)
+			: null
+	);
 
 	function latency(m: Monitor): string {
 		if (m.checking) return 'Verificando…';
@@ -86,6 +114,47 @@
 	{/if}
 {/snippet}
 
+{#snippet card(item: BoardCard, cellEnv: Environment)}
+	<article class="card">
+		<div class="section-header card-header">
+			<svelte:element this={boardLayout ? 'h3' : 'h2'}>{item.service}</svelte:element>
+			<span class="meta">{item.meta}</span>
+			<AssignCompanyButton service={item.service} onAssign={onAssignCompany} />
+		</div>
+		{#each item.segments as seg (segmentKey(seg))}
+			{@render segment(seg, false, item.service, cellEnv)}
+		{/each}
+	</article>
+{/snippet}
+
+{#snippet matrixRow(row: MatrixRow)}
+	<div class="matrix-row">
+		<div class="matrix-service">
+			<div class="matrix-service-head">
+				<span class="matrix-name">{row.service}</span>
+				<AssignCompanyButton service={row.service} onAssign={onAssignCompany} />
+			</div>
+			<span class="meta">{row.meta}</span>
+		</div>
+		{#each row.cells as cell (cell.env)}
+			{#if cell.segments.length === 0}
+				<button type="button" class="cell-empty" onclick={() => onAdd(row.service, 'api', cell.env)}>
+					<Icon name="add-line" size={16} />
+					<span>
+						Agregar en {ENV_LABELS[cell.env]}<span class="visually-hidden"> · {row.service}</span>
+					</span>
+				</button>
+			{:else}
+				<div class="cell-segments">
+					{#each cell.segments as seg (segmentKey(seg))}
+						{@render segment(seg, true, row.service, cell.env)}
+					{/each}
+				</div>
+			{/if}
+		{/each}
+	</div>
+{/snippet}
+
 {#snippet tiles(title: string, list: Monitor[])}
 	<section class="unassigned">
 		<div class="section-header">
@@ -128,18 +197,26 @@
 	</div>
 
 	{#if board && boardEnv}
-		{#if board.cards.length > 0}
-			<div class="cards">
-				{#each board.cards as card (card.service)}
-					<article class="card">
-						<div class="section-header card-header">
-							<h2>{card.service}</h2>
-							<span class="meta">{card.meta}</span>
-						</div>
-						{#each card.segments as seg (segmentKey(seg))}
-							{@render segment(seg, false, card.service, boardEnv)}
+		{#if boardLayout}
+			{#each boardLayout.sections as section (section.company ?? '')}
+				<section class="company-section">
+					<div class="section-header">
+						<h2 class="company-title" class:unassigned={section.company === null}>
+							{section.company ?? 'Sin empresa'}
+						</h2>
+						<span class="meta">{section.meta}</span>
+					</div>
+					<div class="cards">
+						{#each section.items as item (item.service)}
+							{@render card(item, boardEnv)}
 						{/each}
-					</article>
+					</div>
+				</section>
+			{/each}
+		{:else if board.cards.length > 0}
+			<div class="cards">
+				{#each board.cards as item (item.service)}
+					{@render card(item, boardEnv)}
 				{/each}
 			</div>
 		{/if}
@@ -156,30 +233,23 @@
 							<span>{ENV_LABELS[column].toUpperCase()}</span>
 						{/each}
 					</div>
-					{#each matrix.rows as row (row.service)}
-						<div class="matrix-row">
-							<div class="matrix-service">
-								<span class="matrix-name">{row.service}</span>
-								<span class="meta">{row.meta}</span>
+					{#if matrixLayout}
+						{#each matrixLayout.sections as section (section.company ?? '')}
+							<div class="matrix-company">
+								<h2 class="matrix-company-name" class:unassigned={section.company === null}>
+									{section.company ?? 'Sin empresa'}
+								</h2>
+								<span class="meta">{section.meta}</span>
 							</div>
-							{#each row.cells as cell (cell.env)}
-								{#if cell.segments.length === 0}
-									<button type="button" class="cell-empty" onclick={() => onAdd(row.service, 'api', cell.env)}>
-										<Icon name="add-line" size={16} />
-										<span>
-											Agregar en {ENV_LABELS[cell.env]}<span class="visually-hidden"> · {row.service}</span>
-										</span>
-									</button>
-								{:else}
-									<div class="cell-segments">
-										{#each cell.segments as seg (segmentKey(seg))}
-											{@render segment(seg, true, row.service, cell.env)}
-										{/each}
-									</div>
-								{/if}
+							{#each section.items as row (row.service)}
+								{@render matrixRow(row)}
 							{/each}
-						</div>
-					{/each}
+						{/each}
+					{:else}
+						{#each matrix.rows as row (row.service)}
+							{@render matrixRow(row)}
+						{/each}
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -231,7 +301,8 @@
 		flex-wrap: wrap;
 	}
 
-	.section-header h2 {
+	.section-header h2,
+	.section-header h3 {
 		margin: 0;
 		font-size: 18px;
 		font-weight: 700;
@@ -262,9 +333,13 @@
 	}
 
 	.card-header {
-		justify-content: space-between;
+		align-items: center;
 		gap: 8px;
 		padding: 12px 16px;
+	}
+
+	.card-header .meta {
+		margin-left: auto;
 	}
 
 	.segment {
@@ -423,10 +498,49 @@
 		min-width: 0;
 	}
 
+	.matrix-service-head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
 	.matrix-name {
 		font-size: 16px;
 		font-weight: 700;
 		overflow-wrap: anywhere;
+		min-width: 0;
+	}
+
+	/* A full-width row naming the company before its services' rows. */
+	.matrix-company {
+		display: flex;
+		align-items: baseline;
+		gap: 12px;
+		flex-wrap: wrap;
+		padding: 12px 0 4px;
+		border-top: 1px solid var(--border-subtle);
+	}
+
+	.matrix-company-name {
+		margin: 0;
+		font-size: 18px;
+		font-weight: 700;
+		line-height: 1.5;
+	}
+
+	.matrix-company-name.unassigned {
+		color: var(--fg-2);
+	}
+
+	.company-section {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.company-title.unassigned {
+		color: var(--fg-2);
 	}
 
 	.cell-segments {

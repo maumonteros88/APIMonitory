@@ -5,6 +5,7 @@ import {
 	emptyStateCopy,
 	filterByServices,
 	filterMonitors,
+	groupFilterItems,
 	matchesServiceQuery,
 	parseServices,
 	pickerLabel,
@@ -30,6 +31,7 @@ function makeMonitor(
 		description: '',
 		url: 'https://example.com',
 		service,
+		company: null,
 		kind,
 		environment,
 		status,
@@ -261,5 +263,43 @@ describe('emptyStateCopy', () => {
 		expect(emptyStateCopy(4, 'qa', ['Backoffice'])).toMatchObject({ title: 'No hay monitores de Backoffice en QA', canClear: true });
 		expect(emptyStateCopy(4, 'prod', [''])).toMatchObject({ title: 'No hay monitores sin servicio en Prod' });
 		expect(emptyStateCopy(4, 'all', ['Pagos', 'Backoffice']).title).toBe('No hay monitores de los servicios elegidos');
+	});
+});
+
+describe('services under companies', () => {
+	const withCompanies = [
+		{ ...makeMonitor('pagos-a', 'Pagos', 'api', 'prod'), company: 'Empresa B' },
+		{ ...makeMonitor('pagos-b', 'Pagos', 'front', 'qa'), company: 'Empresa B' },
+		{ ...makeMonitor('bo-a', 'Backoffice', 'api', 'prod'), company: 'Empresa A' },
+		makeMonitor('ej-a', 'Ejemplo', 'api', 'prod'),
+		makeMonitor('loose', null, 'api', 'prod')
+	];
+
+	it('carries each service company, computed from every environment', () => {
+		const items = serviceFilterItems(withCompanies, 'dev', []);
+		expect(items.map((i) => [i.key, i.company])).toEqual([
+			['Backoffice', 'Empresa A'],
+			['Ejemplo', null],
+			['Pagos', 'Empresa B'],
+			['', null]
+		]);
+	});
+
+	it('matches a service by its company as well as by its name', () => {
+		const [backoffice, ejemplo] = serviceFilterItems(withCompanies, 'all', []);
+		expect(matchesServiceQuery(backoffice, ' empresa a')).toBe(true);
+		expect(matchesServiceQuery(backoffice, 'OFFICE')).toBe(true);
+		expect(matchesServiceQuery(backoffice, 'empresa b')).toBe(false);
+		expect(matchesServiceQuery(ejemplo, 'empresa')).toBe(false);
+	});
+
+	it('lists company blocks alphabetically, "Sin empresa" last, then "Sin servicio"', () => {
+		const layout = groupFilterItems(serviceFilterItems(withCompanies, 'all', []));
+		expect(layout.blocks.map((b) => [b.company, b.items.map((i) => i.key)])).toEqual([
+			['Empresa A', ['Backoffice']],
+			['Empresa B', ['Pagos']],
+			[null, ['Ejemplo']]
+		]);
+		expect(layout.noService.map((i) => i.key)).toEqual(['']);
 	});
 });

@@ -1,7 +1,9 @@
 <script lang="ts">
 	import type { Monitor } from '$lib/api';
-	import { groupByService, groupMeta } from '$lib/grouping';
+	import { groupByCompany, type CompanyIndex } from '$lib/companies';
+	import { groupByService, groupMeta, type ServiceGroup } from '$lib/grouping';
 	import type { Period } from '$lib/period';
+	import AssignCompanyButton from './AssignCompanyButton.svelte';
 	import Icon from './Icon.svelte';
 	import MonitorRow from './MonitorRow.svelte';
 	import PeriodSelect from './PeriodSelect.svelte';
@@ -9,46 +11,59 @@
 	// monitors already carry the selected period's history and uptime.
 	// twoColumns turns each service group into a card in a two-column grid
 	// with stacked rows; scopeTitle (wide layout only) names what is shown.
+	// companies (built from every monitor, not just these) puts the service
+	// groups under company sections; while it is not enabled the list is
+	// exactly the plain one.
 	let {
 		monitors,
+		companies,
 		showEnv,
 		days,
 		twoColumns,
 		scopeTitle = null,
 		onDaysChange,
 		onAddToService,
+		onAssignCompany,
 		onCheck,
 		onEdit,
 		onDelete
 	}: {
 		monitors: Monitor[];
+		companies: CompanyIndex;
 		showEnv: boolean;
 		days: Period;
 		twoColumns: boolean;
 		scopeTitle?: string | null;
 		onDaysChange: (days: Period) => void;
 		onAddToService: (service: string) => void;
+		onAssignCompany: (service: string) => void;
 		onCheck: (id: string) => void;
 		onEdit: (monitor: Monitor) => void;
 		onDelete: (id: string) => void;
 	} = $props();
 
 	const groups = $derived(groupByService(monitors));
+	const layout = $derived(
+		companies.enabled ? groupByCompany(groups, companies, (group) => group.monitors.length) : null
+	);
 </script>
 
-<section class="groups">
-	<div class="list-toolbar" class:with-title={scopeTitle !== null}>
-		{#if scopeTitle !== null}<span class="scope-title">{scopeTitle}</span>{/if}
-		<PeriodSelect value={days} onChange={onDaysChange} />
-	</div>
+{#snippet serviceGroups(list: ServiceGroup[])}
 	<div class="group-grid" class:two-columns={twoColumns}>
-		{#each groups as group (group.service ?? '')}
+		{#each list as group (group.service ?? '')}
 			<section class="group" class:card={twoColumns}>
 				<div class="group-header">
-					<h2 class:unassigned={group.service === null}>{group.service ?? 'Sin servicio'}</h2>
+					<svelte:element
+						this={layout ? 'h3' : 'h2'}
+						class="group-title"
+						class:unassigned={group.service === null}
+					>
+						{group.service ?? 'Sin servicio'}
+					</svelte:element>
 					<span class="group-meta">{groupMeta(group)}</span>
 					{#if group.service !== null}
 						{@const service = group.service}
+						<AssignCompanyButton {service} onAssign={onAssignCompany} />
 						<button
 							type="button"
 							class="add-button"
@@ -68,6 +83,33 @@
 			</section>
 		{/each}
 	</div>
+{/snippet}
+
+<section class="groups">
+	<div class="list-toolbar" class:with-title={scopeTitle !== null}>
+		{#if scopeTitle !== null}<span class="scope-title">{scopeTitle}</span>{/if}
+		<PeriodSelect value={days} onChange={onDaysChange} />
+	</div>
+	{#if layout}
+		<div class="company-list">
+			{#each layout.sections as section (section.company ?? '')}
+				<section class="company-section">
+					<div class="company-header">
+						<h2 class="company-title" class:unassigned={section.company === null}>
+							{section.company ?? 'Sin empresa'}
+						</h2>
+						<span class="group-meta">{section.meta}</span>
+					</div>
+					{@render serviceGroups(section.items)}
+				</section>
+			{/each}
+			{#if layout.noService.length > 0}
+				{@render serviceGroups(layout.noService)}
+			{/if}
+		</div>
+	{:else}
+		{@render serviceGroups(groups)}
+	{/if}
 </section>
 
 <style>
@@ -121,15 +163,40 @@
 		flex-wrap: wrap;
 	}
 
-	.group-header h2 {
+	.group-title,
+	.company-title {
 		margin: 0;
 		font-size: 18px;
 		font-weight: 700;
 		line-height: 1.5;
 	}
 
-	.group-header h2.unassigned {
+	.group-title.unassigned,
+	.company-title.unassigned {
 		color: var(--fg-2);
+	}
+
+	.company-list {
+		display: flex;
+		flex-direction: column;
+		gap: 32px;
+	}
+
+	.company-section {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.company-header {
+		display: flex;
+		align-items: baseline;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
+	.company-header .group-meta {
+		flex: none;
 	}
 
 	.group-meta {
@@ -180,7 +247,7 @@
 		padding: 12px 12px 12px 16px;
 	}
 
-	.card .group-header h2 {
+	.card .group-title {
 		font-size: 16px;
 	}
 

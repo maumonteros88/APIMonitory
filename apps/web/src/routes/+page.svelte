@@ -9,6 +9,7 @@
 	import {
 		UnauthorizedError,
 		applyMonitorDelta,
+		assignServiceCompany,
 		checkAllMonitors,
 		checkMonitor,
 		createMonitor,
@@ -27,6 +28,7 @@
 		type NewMonitorInput
 	} from '$lib/api';
 	import { getToken, setToken } from '$lib/auth';
+	import { applyServiceCompany, buildCompanyIndex, companyNames, toggleCompany } from '$lib/companies';
 	import { ago } from '$lib/format';
 	import {
 		emptyStateCopy,
@@ -43,6 +45,7 @@
 	import { DEFAULT_PERIOD, applyPeriod, parsePeriod, type Period } from '$lib/period';
 	import { VIEW_OPTIONS, isView, type View } from '$lib/views';
 	import AddMonitorForm from '$lib/components/AddMonitorForm.svelte';
+	import AssignCompanyDialog from '$lib/components/AssignCompanyDialog.svelte';
 	import ChartView from '$lib/components/ChartView.svelte';
 	import FilterBar from '$lib/components/FilterBar.svelte';
 	import FilterRail from '$lib/components/FilterRail.svelte';
@@ -136,6 +139,11 @@
 			: `new|${formPrefill.service ?? ''}|${formPrefill.kind ?? ''}|${formPrefill.environment ?? ''}`
 	);
 
+	// The service whose company the "Asignar empresa" dialog is editing.
+	let assignService = $state<string | null>(null);
+	let assignError = $state<string | null>(null);
+	let assignSubmitting = $state(false);
+
 	let theme = $state<'light' | 'dark'>('light');
 	let view = $state<View>('list');
 	let env = $state<EnvFilter>('all');
@@ -151,6 +159,11 @@
 	const envMonitorCounts = $derived(envCounts(monitors));
 	const serviceItems = $derived(serviceFilterItems(monitors, env, services));
 	const knownServices = $derived(serviceNames(monitors));
+	// From every monitor, never the filtered ones: a service sits under one
+	// company whatever the filters hide.
+	const companyIndex = $derived(buildCompanyIndex(monitors));
+	const knownCompanies = $derived(companyNames(monitors));
+	const assignMonitorCount = $derived(monitors.filter((m) => m.service === assignService).length);
 	const emptyCopy = $derived(emptyStateCopy(monitors.length, env, services));
 
 	// Only against a loaded list: before the first load monitors is [] and
@@ -230,6 +243,10 @@
 
 	function handleToggleService(key: string) {
 		setServices(toggleService(services, key));
+	}
+
+	function handleToggleCompany(serviceKeys: string[]) {
+		setServices(toggleCompany(services, serviceKeys));
 	}
 
 	function clearServices() {
@@ -468,6 +485,7 @@
 					name: input.name,
 					description: input.description,
 					service: input.service,
+					company: input.company,
 					kind: input.kind,
 					environment: input.environment
 				});
@@ -485,6 +503,35 @@
 			formError = err instanceof Error ? err.message : 'Ocurrió un error inesperado';
 		} finally {
 			formSubmitting = false;
+		}
+	}
+
+	function handleAssignCompany(service: string) {
+		assignError = null;
+		assignService = service;
+	}
+
+	function closeAssignCompany() {
+		assignService = null;
+		assignError = null;
+	}
+
+	async function handleAssignSubmit(company: string | null) {
+		if (assignService === null) return;
+		const service = assignService;
+		assignSubmitting = true;
+		assignError = null;
+		try {
+			const result = await assignServiceCompany(service, company);
+			// The endpoint answers with a count, not the monitors: regroup right
+			// away from what it confirmed, then reconcile with the server.
+			monitors = applyServiceCompany(monitors, service, result.company);
+			closeAssignCompany();
+			void loadMonitors();
+		} catch (err) {
+			assignError = err instanceof Error ? err.message : 'Ocurrió un error inesperado';
+		} finally {
+			assignSubmitting = false;
 		}
 	}
 
@@ -600,9 +647,11 @@
 						{env}
 						envCounts={envMonitorCounts}
 						items={serviceItems}
+						grouped={companyIndex.enabled}
 						{services}
 						onEnvChange={setEnv}
 						onToggleService={handleToggleService}
+						onToggleCompany={handleToggleCompany}
 						onClearServices={clearServices}
 					/>
 				</aside>
@@ -611,9 +660,11 @@
 					{env}
 					envCounts={envMonitorCounts}
 					items={serviceItems}
+					grouped={companyIndex.enabled}
 					{services}
 					onEnvChange={setEnv}
 					onToggleService={handleToggleService}
+					onToggleCompany={handleToggleCompany}
 					onClearServices={clearServices}
 				/>
 			{/if}
@@ -647,6 +698,8 @@
 						<AddMonitorForm
 							{editingMonitor}
 							services={knownServices}
+							companies={knownCompanies}
+							companyByService={companyIndex.byService}
 							defaultService={formPrefill.service}
 							defaultKind={formPrefill.kind}
 							defaultEnvironment={formPrefill.environment}
@@ -684,25 +737,29 @@
 						</div>
 					</section>
 				{:else if hasLoadedOnce && view === 'chart'}
-					<ChartView monitors={visibleMonitors} {tabVisible} />
+					<ChartView monitors={visibleMonitors} companies={companyIndex} {tabVisible} />
 				{:else if hasLoadedOnce && view === 'board'}
 					<MonitorBoard
 						monitors={periodMonitors}
+						companies={companyIndex}
 						{env}
 						{days}
 						onDaysChange={setDays}
 						onCheck={handleCheck}
 						onAdd={handleAddFromBoard}
+						onAssignCompany={handleAssignCompany}
 					/>
 				{:else if hasLoadedOnce}
 					<MonitorList
 						monitors={periodMonitors}
+						companies={companyIndex}
 						showEnv={env === 'all'}
 						{days}
 						twoColumns={twoColumnList.current}
 						scopeTitle={wideLayout.current ? scopeTitle(env, services) : null}
 						onDaysChange={setDays}
 						onAddToService={handleAddToService}
+						onAssignCompany={handleAssignCompany}
 						onCheck={handleCheck}
 						onEdit={handleEdit}
 						onDelete={handleDelete}
@@ -710,6 +767,19 @@
 				{/if}
 			</div>
 		</div>
+
+		{#if assignService !== null}
+			<AssignCompanyDialog
+				service={assignService}
+				current={companyIndex.byService.get(assignService) ?? null}
+				monitorCount={assignMonitorCount}
+				companies={knownCompanies}
+				error={assignError}
+				submitting={assignSubmitting}
+				onCancel={closeAssignCompany}
+				onSubmit={handleAssignSubmit}
+			/>
+		{/if}
 
 		<footer class="build-info">
 			Front v{PUBLIC_WEB_VERSION} · API v{PUBLIC_API_VERSION} · commit {PUBLIC_GIT_COMMIT}

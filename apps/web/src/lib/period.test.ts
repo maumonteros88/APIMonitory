@@ -23,6 +23,7 @@ function makeMonitor(history: DayHistory[], uptimePercent: number | null = 99.5)
 		description: '',
 		url: 'https://example.com/health',
 		service: 'Pagos',
+		company: null,
 		kind: 'api',
 		environment: 'prod',
 		status: 'up',

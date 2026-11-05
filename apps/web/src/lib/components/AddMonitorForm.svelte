@@ -1,17 +1,22 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import type { Environment, Monitor, MonitorKind, NewMonitorInput } from '$lib/api';
+	import { prefillCompany } from '$lib/companies';
 	import Icon from './Icon.svelte';
 
 	// When set, the form edits this monitor instead of creating a new one.
 	// Its URL is shown but locked: changing the probe target is a bigger
 	// change than a rename and isn't part of this form. services feeds the
-	// Servicio suggestions. On create, defaultService / defaultKind /
+	// Servicio suggestions, companies the Empresa ones, and companyByService
+	// says which company each existing service has (Empresa follows the
+	// Servicio value, see prefillCompany). On create, defaultService / defaultKind /
 	// defaultEnvironment prefill the fields from wherever the form was opened
 	// (they stay editable) and prefillNote says where they came from.
 	let {
 		editingMonitor = null,
 		services,
+		companies,
+		companyByService,
 		defaultService = null,
 		defaultKind = null,
 		defaultEnvironment,
@@ -23,6 +28,8 @@
 	}: {
 		editingMonitor?: Monitor | null;
 		services: string[];
+		companies: string[];
+		companyByService: ReadonlyMap<string, string>;
 		defaultService?: string | null;
 		defaultKind?: MonitorKind | null;
 		defaultEnvironment: Environment | null;
@@ -55,13 +62,22 @@
 		monitor: editingMonitor,
 		service: defaultService,
 		kind: defaultKind,
-		environment: defaultEnvironment
+		environment: defaultEnvironment,
+		company: (defaultService && companyByService.get(defaultService)) || ''
 	}));
 
 	let name = $state(initial.monitor?.name ?? '');
 	let url = $state(initial.monitor?.url ?? '');
 	let description = $state(initial.monitor?.description ?? '');
 	let service = $state(initial.monitor?.service ?? initial.service ?? '');
+	// A monitor's own company is the user's; the one that comes with the
+	// service a "+" button was clicked on is the form's, so it follows the
+	// Servicio field until the user touches Empresa.
+	let companyField = $state(
+		initial.monitor
+			? { value: initial.monitor.company ?? '', auto: false }
+			: { value: initial.company, auto: initial.company !== '' }
+	);
 	let kind = $state<MonitorKind>(initial.monitor?.kind ?? initial.kind ?? 'api');
 	let environment = $state<Environment | null>(
 		initial.monitor ? initial.monitor.environment : initial.environment
@@ -91,6 +107,10 @@
 			: 'El endpoint de health de la API. Si devuelve un JSON con "commit", se muestra en la tarjeta.'
 	);
 
+	function handleServiceInput(event: Event & { currentTarget: HTMLInputElement }) {
+		companyField = prefillCompany(companyField, companyByService.get(event.currentTarget.value.trim()) ?? null);
+	}
+
 	function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		onSubmit({
@@ -98,6 +118,7 @@
 			url: url.trim(),
 			description: description.trim(),
 			service: service.trim() || null,
+			company: companyField.value.trim() || null,
 			kind,
 			environment
 		});
@@ -188,6 +209,7 @@
 			autocomplete="off"
 			aria-describedby="{uid}-service-help"
 			bind:value={service}
+			oninput={handleServiceInput}
 		/>
 		<datalist id="{uid}-services">
 			{#each services as option (option)}
@@ -196,6 +218,29 @@
 		</datalist>
 		<span id="{uid}-service-help" class="help">
 			Agrupa el front y la API de un mismo servicio. Elige uno existente o escribe uno nuevo.
+		</span>
+	</div>
+
+	<div class="field">
+		<label for="{uid}-company">Empresa <span class="optional">(opcional)</span></label>
+		<input
+			id="{uid}-company"
+			type="text"
+			placeholder="Empresa A"
+			list="{uid}-companies"
+			maxlength="80"
+			autocomplete="off"
+			aria-describedby="{uid}-company-help"
+			bind:value={companyField.value}
+			oninput={() => (companyField.auto = false)}
+		/>
+		<datalist id="{uid}-companies">
+			{#each companies as option (option)}
+				<option value={option}></option>
+			{/each}
+		</datalist>
+		<span id="{uid}-company-help" class="help">
+			Agrupa los servicios de una misma empresa. Elige una existente o escribe una nueva.
 		</span>
 	</div>
 

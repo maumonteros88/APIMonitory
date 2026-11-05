@@ -11,14 +11,23 @@
 		parseLatencyRange,
 		staleAfterMs,
 		toLatencyData,
+		type ChartGroup,
 		type LatencyData
 	} from '$lib/chart';
+	import { groupByCompany, type CompanyIndex } from '$lib/companies';
 	import { WORST_DOT } from '$lib/filters';
 	import LatencyCard from './LatencyCard.svelte';
 
 	// monitors are the ones visible under the filters. tabVisible comes from
 	// the page's visibilitychange handling: the refresh only runs while true.
-	let { monitors, tabVisible }: { monitors: Monitor[]; tabVisible: boolean } = $props();
+	// companies (built from every monitor, not just these) puts the service
+	// groups under company headings; while it is not enabled the view is
+	// exactly the plain one.
+	let {
+		monitors,
+		companies,
+		tabVisible
+	}: { monitors: Monitor[]; companies: CompanyIndex; tabVisible: boolean } = $props();
 
 	const RANGE_KEY = 'apimonitory_chart_range';
 	// How often the age notice re-evaluates while the tab is visible.
@@ -48,6 +57,11 @@
 	let now = $state(Date.now());
 
 	const groups = $derived(buildChartGroups(monitors));
+	const layout = $derived(
+		companies.enabled
+			? groupByCompany(groups, companies, (group) => group.cards.reduce((sum, card) => sum + card.monitors.length, 0))
+			: null
+	);
 	// Sorted and joined, so the fetch effect below only reruns when the set
 	// of visible monitors changes: an SSE delta replaces monitors with new
 	// objects but leaves this string equal, and an equal derived does not
@@ -163,6 +177,31 @@
 	});
 </script>
 
+{#snippet serviceGroup(group: ChartGroup)}
+	<section class="group">
+		<div class="group-header">
+			<span class="group-dot" style="background: {WORST_DOT[group.worst]}" aria-hidden="true"></span>
+			<svelte:element this={layout ? 'h3' : 'h2'} class="group-title" class:unassigned={group.service === null}>
+				{group.service ?? 'Sin servicio'}
+			</svelte:element>
+			<span class="group-meta tone-{group.meta.tone}">{group.meta.text}</span>
+		</div>
+		<div class="cards">
+			{#each group.cards as card (card.key)}
+				<LatencyCard
+					{card}
+					service={group.service}
+					{range}
+					data={current}
+					{loading}
+					{failed}
+					onRetry={retry}
+				/>
+			{/each}
+		</div>
+	</section>
+{/snippet}
+
 <section class="chart-view">
 	<div class="chart-header">
 		<div class="titles">
@@ -214,28 +253,28 @@
 		</div>
 	</div>
 
-	{#each groups as group (group.key)}
-		<section class="group">
-			<div class="group-header">
-				<span class="group-dot" style="background: {WORST_DOT[group.worst]}" aria-hidden="true"></span>
-				<h2 class:unassigned={group.service === null}>{group.service ?? 'Sin servicio'}</h2>
-				<span class="group-meta tone-{group.meta.tone}">{group.meta.text}</span>
-			</div>
-			<div class="cards">
-				{#each group.cards as card (card.key)}
-					<LatencyCard
-						{card}
-						service={group.service}
-						{range}
-						data={current}
-						{loading}
-						{failed}
-						onRetry={retry}
-					/>
+	{#if layout}
+		{#each layout.sections as section (section.company ?? '')}
+			<section class="company-section">
+				<div class="company-header">
+					<h2 class="company-title" class:unassigned={section.company === null}>
+						{section.company ?? 'Sin empresa'}
+					</h2>
+					<span class="group-meta">{section.meta}</span>
+				</div>
+				{#each section.items as group (group.key)}
+					{@render serviceGroup(group)}
 				{/each}
-			</div>
-		</section>
-	{/each}
+			</section>
+		{/each}
+		{#each layout.noService as group (group.key)}
+			{@render serviceGroup(group)}
+		{/each}
+	{:else}
+		{#each groups as group (group.key)}
+			{@render serviceGroup(group)}
+		{/each}
+	{/if}
 </section>
 
 <style>
@@ -392,15 +431,30 @@
 		flex-shrink: 0;
 	}
 
-	.group-header h2 {
+	.group-title,
+	.company-title {
 		margin: 0;
 		font-size: 18px;
 		font-weight: 700;
 		line-height: 1.5;
 	}
 
-	.group-header h2.unassigned {
+	.group-title.unassigned,
+	.company-title.unassigned {
 		color: var(--m-sub-tx);
+	}
+
+	.company-section {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	.company-header {
+		display: flex;
+		align-items: baseline;
+		gap: 10px;
+		flex-wrap: wrap;
 	}
 
 	.group-meta {

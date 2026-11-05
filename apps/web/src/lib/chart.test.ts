@@ -43,6 +43,7 @@ function makeMonitor(
 		description: '',
 		url: 'https://example.com',
 		service,
+		company: null,
 		kind,
 		environment,
 		status,

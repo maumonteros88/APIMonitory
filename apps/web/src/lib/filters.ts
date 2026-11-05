@@ -1,4 +1,5 @@
 import type { Environment, Monitor } from './api';
+import { buildCompanyIndex, partitionByCompany, type CompanyBlock } from './companies';
 import { ENV_LABELS, KIND_LABELS, filterByEnv, orderMonitors, serviceNames, type EnvFilter } from './grouping';
 
 /** Stands for "Sin servicio" in a service selection, so monitors without a
@@ -73,6 +74,8 @@ export const WORST_DOT: Record<WorstStatus, string> = {
 export interface ServiceFilterItem {
 	key: string;
 	name: string;
+	/** The service's company (see serviceCompany); null for none and for "Sin servicio". */
+	company: string | null;
 	/** Monitors of the service in the selected environment. */
 	count: number;
 	down: number;
@@ -88,11 +91,14 @@ export function serviceFilterItems(monitors: Monitor[], env: EnvFilter, services
 	const inEnv = filterByEnv(monitors, env);
 	const keys = serviceNames(monitors);
 	if (monitors.some((m) => m.service === null)) keys.push(NO_SERVICE);
+	// From every monitor, not inEnv: the filter must not move a service.
+	const companies = buildCompanyIndex(monitors).byService;
 	return keys.map((key) => {
 		const list = inEnv.filter((m) => serviceKey(m) === key);
 		return {
 			key,
 			name: serviceLabel(key),
+			company: companies.get(key) ?? null,
 			count: list.length,
 			down: list.filter((m) => m.status === 'down').length,
 			degraded: list.filter((m) => m.status === 'degraded').length,
@@ -112,9 +118,32 @@ export function serviceItemMeta(item: ServiceFilterItem): { text: string; tone: 
 	return { text: String(item.count), tone: 'plain' };
 }
 
+/** A service matches by its name or by its company's. */
 export function matchesServiceQuery(item: ServiceFilterItem, query: string): boolean {
 	const q = query.trim().toLocaleLowerCase('es');
-	return q === '' || item.name.toLocaleLowerCase('es').includes(q);
+	if (q === '') return true;
+	return (
+		item.name.toLocaleLowerCase('es').includes(q) ||
+		(item.company !== null && item.company.toLocaleLowerCase('es').includes(q))
+	);
+}
+
+export interface FilterItemLayout {
+	blocks: CompanyBlock<ServiceFilterItem>[];
+	/** The "Sin servicio" item, listed after every company block. */
+	noService: ServiceFilterItem[];
+}
+
+/** The rail/picker list under company sub-rows: companies alphabetically,
+ * "Sin empresa" last, then "Sin servicio". */
+export function groupFilterItems(items: ServiceFilterItem[]): FilterItemLayout {
+	return {
+		blocks: partitionByCompany(
+			items.filter((item) => item.key !== NO_SERVICE),
+			(item) => item.company
+		),
+		noService: items.filter((item) => item.key === NO_SERVICE)
+	};
 }
 
 /** The compact picker's button: "Todos los servicios" / "1 servicio" / "3 servicios". */

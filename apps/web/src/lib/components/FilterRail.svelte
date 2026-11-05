@@ -7,22 +7,27 @@
 
 	// The wide-screen filters: environment and services side by side with
 	// the content. items are every service with its status in env; services
-	// is the selection (empty = every service).
+	// is the selection (empty = every service). With grouped the services are
+	// listed under their companies (see ServiceCheckList).
 	let {
 		env,
 		envCounts,
 		items,
+		grouped,
 		services,
 		onEnvChange,
 		onToggleService,
+		onToggleCompany,
 		onClearServices
 	}: {
 		env: EnvFilter;
 		envCounts: Record<EnvFilter, number>;
 		items: ServiceFilterItem[];
+		grouped: boolean;
 		services: string[];
 		onEnvChange: (env: EnvFilter) => void;
 		onToggleService: (key: string) => void;
+		onToggleCompany: (serviceKeys: string[]) => void;
 		onClearServices: () => void;
 	} = $props();
 
@@ -56,7 +61,7 @@
 			<span class="all-label">Todos los servicios</span>
 			<span class="all-count">{envCounts[env]}</span>
 		</button>
-		<ServiceCheckList items={shownItems} onToggle={onToggleService} />
+		<ServiceCheckList items={shownItems} {grouped} onToggle={onToggleService} {onToggleCompany} />
 		{#if shownItems.length === 0 && query.trim() !== ''}
 			<span class="no-match">Ningún servicio coincide.</span>
 		{/if}
