@@ -36,6 +36,7 @@ same way the Docker image does.
 | `DATABASE_URL` | yes | — | Postgres connection string, e.g. `postgres://user:pass@host:5432/db?sslmode=disable` |
 | `API_TOKEN` | yes | — | Bearer token required by every `/api/*` route except `/healthz` |
 | `PORT` | no | `8080` | HTTP port the server listens on |
+| `ASPNETCORE_PORT` | no | — | Set by IIS (ASP.NET Core Module). When present, the server listens on `127.0.0.1:<port>` and `PORT` is ignored |
 | `CHECK_INTERVAL` | no | `60s` | How often each monitor is probed |
 | `CHECK_TIMEOUT` | no | `5s` | Per-probe HTTP timeout |
 | `RETRY_DELAY` | no | `10s` | Delay before retrying a failed probe |
@@ -52,6 +53,20 @@ make test
 
 Runs the Go test suite (`apps/api`) and the frontend checks/tests
 (`apps/web`); fails if either fails.
+
+## Deploy
+
+Production runs on Windows Server / IIS through the ASP.NET Core Module
+(out of process). Once the server is set up, a deploy is:
+
+```bash
+git push             # deploy.sh only deploys pushed commits
+./deploy/deploy.sh   # build, sign, publish a GitHub Release, wait
+```
+
+The server installs signed releases on its own within about 2 minutes,
+and `GET /healthz` reports the live `commit` and `build`. Server setup,
+rollback and details: [deploy/iis/README.md](deploy/iis/README.md).
 
 ## Architecture
 

@@ -224,6 +224,26 @@ folder), then in an **elevated Windows PowerShell 5.1**:
 .\setup-autoupdate.ps1 -PublicKey (Get-Clipboard)
 ```
 
+If the clipboard does not carry the key over to the server, the script
+stops with `PublicKey must be one ssh-ed25519 public key line`. In that
+case build the key from short lines instead. Print the two halves of
+its base64 part on the Mac:
+
+```bash
+b=$(awk '{print $2}' ~/.ssh/apimonitory_deploy.pub)
+echo "${b:0:34}"; echo "${b:34}"
+```
+
+and paste them in:
+
+```powershell
+$k = 'ssh-ed25519 ' +
+  '<first half>' +
+  '<second half>' +
+  ' apimonitory-deploy'
+.\setup-autoupdate.ps1 -PublicKey $k
+```
+
 Optional: `-Repo` (default `maumonteros88/APIMonitory`), `-HostName`,
 `-Root`, `-SshKeygen` (default `C:\Program Files\OpenSSH\ssh-keygen.exe`).
 It refuses to continue if `ssh-keygen` is missing or older than OpenSSH
@@ -241,6 +261,9 @@ It refuses to continue if `ssh-keygen` is missing or older than OpenSSH
   warns if other accounts can write to `<root>`;
 - registers the task `APIMonitory auto-update` (SYSTEM, every 2 min,
   no overlap, 10 min limit), replacing it if it exists.
+
+Until the first release exists, every run logs `Cannot read version.txt:
+... (404) Not Found.` and `LastTaskResult` is 1. That is expected.
 
 ### Deploying
 
@@ -287,6 +310,64 @@ verified download. Equal means the broken build is live, so it runs
 `ROLLED BACK to previous exe` (or `ROLLBACK FAILED` plus manual steps).
 Different means the failure came before the swap and nothing is touched.
 The version goes to `failed.txt` either way.
+
+### Day-to-day
+
+Every change, front, back or both, ships the same way:
+
+1. Test locally (`make test`).
+2. Commit and push to `origin`.
+3. Run `./deploy/deploy.sh` and wait for `Deployed <commit> as release
+   <tag>` (2 to 4 minutes).
+
+No server access is needed. Notes:
+
+- Do not rebuild or commit `apps/api/internal/webui/dist` just to deploy:
+  `make release-windows` builds the frontend itself.
+- New database migrations are embedded in `api.exe` and run when it
+  starts.
+- After a Mac reboot ssh-agent no longer holds the key, so signing asks
+  for its passphrase. Type it, or load the key first with
+  `ssh-add --apple-use-keychain ~/.ssh/apimonitory_deploy`.
+- `deploy.sh` ships only `api.exe`. Pool environment variables,
+  `web.config` and the scripts in this folder need the server (next
+  section).
+
+### Changing server-side files
+
+| Change | What to do on the server |
+|---|---|
+| `DATABASE_URL`, `API_TOKEN`, `APP_TIMEZONE` | Re-run `setup-iis.ps1` (section 3) |
+| Any other pool environment variable | Add it to the pool by hand (IIS Manager, Configuration Editor, `applicationPools`) |
+| `web.config` | Copy it into `<root>\web\`, then run `keepalive.ps1 -HostName <host>` (section 6) |
+| Scripts in `deploy/iis` | Copy the bundle (below), then re-run `setup-autoupdate.ps1` |
+
+To copy the scripts, build a bundle on the Mac:
+
+```bash
+mkdir -p build && rm -f build/apimonitory-deploy.zip
+(cd deploy/iis && zip -q -X ../../build/apimonitory-deploy.zip \
+  *.ps1 web.config README.md)
+```
+
+Copy `build/apimonitory-deploy.zip` to the server's Documents folder and,
+in a new elevated PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+$zip = "$HOME\Documents\apimonitory-deploy.zip"
+$dst = 'C:\inetpub\APIMonitory\deploy'
+Expand-Archive -Path $zip -DestinationPath $dst -Force
+Get-ChildItem $dst | Unblock-File
+cd $dst
+```
+
+This only refreshes `<root>\deploy`. The bundle's `web.config` is not the
+live one, which is in `<root>\web`. If `keepalive.ps1` changed, also copy
+it over `<root>\keepalive.ps1`, because the keep-alive task runs that
+copy. Then re-run `setup-autoupdate.ps1` with the same key (see above):
+it copies the new `pull-release.ps1` into `<root>` and re-applies the
+locks.
 
 ### Watching it
 
