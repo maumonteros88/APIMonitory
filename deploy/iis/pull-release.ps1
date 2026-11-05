@@ -55,9 +55,31 @@ function Short {
 }
 
 function Write-Log {
+    # Must never throw: the catch blocks log too, so a failed write
+    # would end the run with no trace at all. FileShare.ReadWrite lets
+    # it append while another process has the log open (for example
+    # Get-Content -Wait); a busy file is retried, then the line goes
+    # to <log>.err.
     param([string]$Message)
     $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Add-Content -Path $logFile -Value "$stamp $Message"
+    $line = "$stamp $Message`r`n"
+    $bytes = [Text.Encoding]::UTF8.GetBytes($line)
+    $mode = [IO.FileMode]::Append
+    $access = [IO.FileAccess]::Write
+    $share = [IO.FileShare]::ReadWrite
+    for ($try = 1; $try -le 10; $try++) {
+        try {
+            $fs = [IO.File]::Open($logFile, $mode, $access, $share)
+            try { $fs.Write($bytes, 0, $bytes.Length) }
+            finally { $fs.Dispose() }
+            return
+        }
+        catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    try { [IO.File]::AppendAllText("$logFile.err", $line) }
+    catch { Write-Verbose 'log write failed' }
 }
 
 function Limit-Log {
@@ -90,10 +112,29 @@ function Get-Remote {
 }
 
 function Save-Remote {
+    # HttpWebRequest instead of WebClient: WebClient has no read
+    # timeout, so a stalled download would hang the task silently.
+    # Here a read that stalls for 60 s throws and the run logs it.
     param([string]$Url, [string]$Path)
-    $wc = New-Client
-    try { $wc.DownloadFile($Url, $Path) }
-    finally { $wc.Dispose() }
+    $req = [Net.WebRequest]::Create($Url)
+    $req.UserAgent = 'APIMonitory-autoupdate'
+    $level = [Net.Cache.RequestCacheLevel]::BypassCache
+    $req.CachePolicy = New-Object Net.Cache.RequestCachePolicy($level)
+    $req.Timeout = 60000
+    $req.ReadWriteTimeout = 60000
+    $resp = $req.GetResponse()
+    try {
+        $in = $resp.GetResponseStream()
+        $out = [IO.File]::Create($Path)
+        try { $in.CopyTo($out) }
+        finally {
+            $out.Dispose()
+            $in.Dispose()
+        }
+    }
+    finally {
+        $resp.Dispose()
+    }
 }
 
 function Test-Signature {
@@ -260,8 +301,12 @@ function Invoke-Pull {
     Remove-Incoming
     try {
         try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
             Save-Remote "$dl/api.exe" $exePath
             Save-Remote "$dl/api.exe.sig" $sigPath
+            $size = (Get-Item $exePath).Length
+            $secs = [int]$sw.Elapsed.TotalSeconds
+            Write-Log "Downloaded api.exe ($size bytes) in ${secs}s."
         }
         catch {
             # Network problem: not the release's fault, retry later.
@@ -305,5 +350,8 @@ try {
 catch {
     Write-Log "Unexpected error: $(Short $_.Exception.Message)"
 }
-Limit-Log
+try { Limit-Log }
+catch {
+    Write-Log "Cannot trim the log: $(Short $_.Exception.Message)"
+}
 exit $code
