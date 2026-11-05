@@ -168,6 +168,15 @@ func TestStore_CreateMonitor_Labels(t *testing.T) {
 		t.Errorf("labels = %+v/%q/%+v, want Backoffice/front/qa", got.Service, got.Kind, got.Environment)
 	}
 
+	prepro, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", MonitorLabels{Kind: "api", Environment: "prepro"})
+	if err != nil {
+		t.Fatalf("CreateMonitor with prepro: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, prepro.ID)
+	if prepro.Environment.String != "prepro" {
+		t.Errorf("environment = %+v, want prepro", prepro.Environment)
+	}
+
 	// The CHECK constraints are the last line of defense behind the HTTP
 	// validation.
 	for _, labels := range []MonitorLabels{{Kind: "web"}, {Kind: "api", Environment: "staging"}} {

@@ -275,7 +275,7 @@ func TestCreateMonitor_Labels(t *testing.T) {
 	const (
 		errService     = "El servicio no puede superar los 80 caracteres"
 		errKind        = "El tipo debe ser front o api"
-		errEnvironment = "El ambiente debe ser dev, qa o prod"
+		errEnvironment = "El ambiente debe ser dev, qa, prepro o prod"
 	)
 	accented80 := strings.Repeat("ñ", 80) // 160 bytes: the limit counts characters
 
@@ -347,12 +347,13 @@ func TestUpdateMonitor_Labels(t *testing.T) {
 		{"empty service clears it", `{"name":"Pagos Web","service":""}`, http.StatusOK, [3]string{`null`, `"front"`, `"prod"`}, ""},
 		{"set kind", `{"name":"Pagos Web","kind":"api"}`, http.StatusOK, [3]string{`"Pagos"`, `"api"`, `"prod"`}, ""},
 		{"set environment", `{"name":"Pagos Web","environment":"qa"}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `"qa"`}, ""},
+		{"set prepro", `{"name":"Pagos Web","environment":"prepro"}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `"prepro"`}, ""},
 		{"null environment clears it", `{"name":"Pagos Web","environment":null}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `null`}, ""},
 		{"empty environment clears it", `{"name":"Pagos Web","environment":""}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `null`}, ""},
 		{"set every label", `{"name":"Pagos Web","service":"Ejemplo","kind":"api","environment":"dev"}`, http.StatusOK, [3]string{`"Ejemplo"`, `"api"`, `"dev"`}, ""},
 		{"null kind", `{"name":"Pagos Web","kind":null}`, http.StatusBadRequest, stored, "El tipo debe ser front o api"},
 		{"unknown kind", `{"name":"Pagos Web","kind":"web"}`, http.StatusBadRequest, stored, "El tipo debe ser front o api"},
-		{"unknown environment", `{"name":"Pagos Web","environment":"staging"}`, http.StatusBadRequest, stored, "El ambiente debe ser dev, qa o prod"},
+		{"unknown environment", `{"name":"Pagos Web","environment":"staging"}`, http.StatusBadRequest, stored, "El ambiente debe ser dev, qa, prepro o prod"},
 		{"service over the limit", `{"name":"Pagos Web","service":"` + strings.Repeat("a", 81) + `"}`, http.StatusBadRequest, stored, "El servicio no puede superar los 80 caracteres"},
 		{"non-string service", `{"name":"Pagos Web","service":5}`, http.StatusBadRequest, stored, "El cuerpo de la solicitud no es JSON válido"},
 	}

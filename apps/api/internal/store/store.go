@@ -76,7 +76,7 @@ func (s *Store) Close() {
 type MonitorLabels struct {
 	Service     string // "" means no service (stored as NULL)
 	Kind        string // "front" or "api"
-	Environment string // "dev", "qa", "prod", or "" for none (stored as NULL)
+	Environment string // "dev", "qa", "prepro", "prod", or "" for none (stored as NULL)
 }
 
 // CreateMonitor inserts a new monitor in the pending state.

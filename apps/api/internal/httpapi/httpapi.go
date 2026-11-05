@@ -272,9 +272,9 @@ func validateLabels(l store.MonitorLabels) string {
 		return "El tipo debe ser front o api"
 	}
 	switch l.Environment {
-	case "", "dev", "qa", "prod":
+	case "", "dev", "qa", "prepro", "prod":
 	default:
-		return "El ambiente debe ser dev, qa o prod"
+		return "El ambiente debe ser dev, qa, prepro o prod"
 	}
 	return ""
 }
