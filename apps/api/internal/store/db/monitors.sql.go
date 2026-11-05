@@ -13,19 +13,29 @@ import (
 )
 
 const createMonitor = `-- name: CreateMonitor :one
-insert into monitors (name, description, url)
-values ($1, $2, $3)
-returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit
+insert into monitors (name, description, url, service, kind, environment)
+values ($1, $2, $3, $4, $5, $6)
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment
 `
 
 type CreateMonitorParams struct {
-	Name        string `db:"name" json:"name"`
-	Description string `db:"description" json:"description"`
-	Url         string `db:"url" json:"url"`
+	Name        string      `db:"name" json:"name"`
+	Description string      `db:"description" json:"description"`
+	Url         string      `db:"url" json:"url"`
+	Service     pgtype.Text `db:"service" json:"service"`
+	Kind        string      `db:"kind" json:"kind"`
+	Environment pgtype.Text `db:"environment" json:"environment"`
 }
 
 func (q *Queries) CreateMonitor(ctx context.Context, arg CreateMonitorParams) (Monitor, error) {
-	row := q.db.QueryRow(ctx, createMonitor, arg.Name, arg.Description, arg.Url)
+	row := q.db.QueryRow(ctx, createMonitor,
+		arg.Name,
+		arg.Description,
+		arg.Url,
+		arg.Service,
+		arg.Kind,
+		arg.Environment,
+	)
 	var i Monitor
 	err := row.Scan(
 		&i.ID,
@@ -40,6 +50,9 @@ func (q *Queries) CreateMonitor(ctx context.Context, arg CreateMonitorParams) (M
 		&i.LastErrorKind,
 		&i.CreatedAt,
 		&i.LastCommit,
+		&i.Service,
+		&i.Kind,
+		&i.Environment,
 	)
 	return i, err
 }
@@ -58,7 +71,7 @@ func (q *Queries) DeleteMonitor(ctx context.Context, id uuid.UUID) (int64, error
 }
 
 const getMonitor = `-- name: GetMonitor :one
-select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit from monitors
+select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment from monitors
 where id = $1
 `
 
@@ -78,12 +91,15 @@ func (q *Queries) GetMonitor(ctx context.Context, id uuid.UUID) (Monitor, error)
 		&i.LastErrorKind,
 		&i.CreatedAt,
 		&i.LastCommit,
+		&i.Service,
+		&i.Kind,
+		&i.Environment,
 	)
 	return i, err
 }
 
 const listMonitors = `-- name: ListMonitors :many
-select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit from monitors
+select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment from monitors
 order by created_at asc
 `
 
@@ -109,6 +125,9 @@ func (q *Queries) ListMonitors(ctx context.Context) ([]Monitor, error) {
 			&i.LastErrorKind,
 			&i.CreatedAt,
 			&i.LastCommit,
+			&i.Service,
+			&i.Kind,
+			&i.Environment,
 		); err != nil {
 			return nil, err
 		}
@@ -163,19 +182,32 @@ func (q *Queries) UpdateMonitorAfterCheck(ctx context.Context, arg UpdateMonitor
 const updateMonitorDetails = `-- name: UpdateMonitorDetails :one
 update monitors
 set name = $2,
-    description = $3
+    description = $3,
+    service = $4,
+    kind = $5,
+    environment = $6
 where id = $1
-returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment
 `
 
 type UpdateMonitorDetailsParams struct {
-	ID          uuid.UUID `db:"id" json:"id"`
-	Name        string    `db:"name" json:"name"`
-	Description string    `db:"description" json:"description"`
+	ID          uuid.UUID   `db:"id" json:"id"`
+	Name        string      `db:"name" json:"name"`
+	Description string      `db:"description" json:"description"`
+	Service     pgtype.Text `db:"service" json:"service"`
+	Kind        string      `db:"kind" json:"kind"`
+	Environment pgtype.Text `db:"environment" json:"environment"`
 }
 
 func (q *Queries) UpdateMonitorDetails(ctx context.Context, arg UpdateMonitorDetailsParams) (Monitor, error) {
-	row := q.db.QueryRow(ctx, updateMonitorDetails, arg.ID, arg.Name, arg.Description)
+	row := q.db.QueryRow(ctx, updateMonitorDetails,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.Service,
+		arg.Kind,
+		arg.Environment,
+	)
 	var i Monitor
 	err := row.Scan(
 		&i.ID,
@@ -190,6 +222,9 @@ func (q *Queries) UpdateMonitorDetails(ctx context.Context, arg UpdateMonitorDet
 		&i.LastErrorKind,
 		&i.CreatedAt,
 		&i.LastCommit,
+		&i.Service,
+		&i.Kind,
+		&i.Environment,
 	)
 	return i, err
 }

@@ -43,11 +43,24 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{monitors: map[uuid.UUID]db.Monitor{}}
 }
 
-func (f *fakeStore) CreateMonitor(_ context.Context, name, description, url string) (db.Monitor, error) {
+func (f *fakeStore) CreateMonitor(_ context.Context, name, description, url string, labels store.MonitorLabels) (db.Monitor, error) {
 	m := db.Monitor{ID: uuid.New(), Name: name, Description: description, Url: url, Status: "pending"}
+	setLabels(&m, labels)
 	f.monitors[m.ID] = m
 	return m, nil
 }
+
+// setLabels mirrors how the real store persists labels: "" is stored as
+// NULL for service and environment.
+func setLabels(m *db.Monitor, labels store.MonitorLabels) {
+	m.Service = pgtype.Text{String: labels.Service, Valid: labels.Service != ""}
+	m.Kind = labels.Kind
+	m.Environment = pgtype.Text{String: labels.Environment, Valid: labels.Environment != ""}
+}
+
+// defaultLabels is what POST /api/monitors stores when a body sends no
+// labels, for fixtures that don't care about them.
+var defaultLabels = store.MonitorLabels{Kind: "api"}
 
 func (f *fakeStore) ListMonitors(_ context.Context) ([]db.Monitor, error) {
 	out := make([]db.Monitor, 0, len(f.monitors))
@@ -65,13 +78,14 @@ func (f *fakeStore) GetMonitor(_ context.Context, id uuid.UUID) (db.Monitor, err
 	return m, nil
 }
 
-func (f *fakeStore) UpdateMonitorDetails(_ context.Context, id uuid.UUID, name, description string) (db.Monitor, error) {
+func (f *fakeStore) UpdateMonitorDetails(_ context.Context, id uuid.UUID, name, description string, labels store.MonitorLabels) (db.Monitor, error) {
 	m, ok := f.monitors[id]
 	if !ok {
 		return db.Monitor{}, store.ErrNotFound
 	}
 	m.Name = name
 	m.Description = description
+	setLabels(&m, labels)
 	f.monitors[id] = m
 	return m, nil
 }
@@ -213,6 +227,144 @@ func TestCreateMonitor_Success(t *testing.T) {
 	}
 }
 
+// labelsJSON returns the raw JSON values of a monitor payload's service,
+// kind and environment keys, so tests can tell null apart from "" or from a
+// missing key.
+func labelsJSON(t *testing.T, data []byte) [3]string {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode monitor payload: %v", err)
+	}
+	var out [3]string
+	for i, key := range []string{"service", "kind", "environment"} {
+		v, ok := raw[key]
+		if !ok {
+			t.Fatalf("monitor payload has no %q key: %s", key, data)
+		}
+		out[i] = string(v)
+	}
+	return out
+}
+
+func TestCreateMonitor_Labels(t *testing.T) {
+	const (
+		errService     = "El servicio no puede superar los 80 caracteres"
+		errKind        = "El tipo debe ser front o api"
+		errEnvironment = "El ambiente debe ser dev, qa o prod"
+	)
+	accented80 := strings.Repeat("ñ", 80) // 160 bytes: the limit counts characters
+
+	tests := []struct {
+		name       string
+		fields     string // label fields appended to an otherwise valid body
+		wantStatus int
+		wantLabels [3]string // service, kind, environment as raw JSON
+		wantError  string
+	}{
+		{"no labels", ``, http.StatusCreated, [3]string{`null`, `"api"`, `null`}, ""},
+		{"all labels", `,"service":"Pagos","kind":"front","environment":"prod"`, http.StatusCreated, [3]string{`"Pagos"`, `"front"`, `"prod"`}, ""},
+		{"service is trimmed", `,"service":"  Pagos  "`, http.StatusCreated, [3]string{`"Pagos"`, `"api"`, `null`}, ""},
+		{"blank service is null", `,"service":"   "`, http.StatusCreated, [3]string{`null`, `"api"`, `null`}, ""},
+		{"null labels use the defaults", `,"service":null,"kind":null,"environment":null`, http.StatusCreated, [3]string{`null`, `"api"`, `null`}, ""},
+		{"empty environment is null", `,"environment":""`, http.StatusCreated, [3]string{`null`, `"api"`, `null`}, ""},
+		{"service at the limit", `,"service":"` + accented80 + `"`, http.StatusCreated, [3]string{`"` + accented80 + `"`, `"api"`, `null`}, ""},
+		{"service over the limit", `,"service":"` + strings.Repeat("a", 81) + `"`, http.StatusBadRequest, [3]string{}, errService},
+		{"unknown kind", `,"kind":"web"`, http.StatusBadRequest, [3]string{}, errKind},
+		{"empty kind", `,"kind":""`, http.StatusBadRequest, [3]string{}, errKind},
+		{"unknown environment", `,"environment":"staging"`, http.StatusBadRequest, [3]string{}, errEnvironment},
+		{"environment is case sensitive", `,"environment":"Prod"`, http.StatusBadRequest, [3]string{}, errEnvironment},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeStore()
+			mux := newTestMux(s)
+
+			body := `{"name":"Pagos API","url":"https://example.com/health"` + tc.fields + `}`
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/monitors", strings.NewReader(body)))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantError != "" {
+				if msg := decodeError(t, rec); msg != tc.wantError {
+					t.Errorf("error = %q, want %q", msg, tc.wantError)
+				}
+				if len(s.monitors) != 0 {
+					t.Errorf("store has %d monitors after a rejected create, want 0", len(s.monitors))
+				}
+				return
+			}
+			if got := labelsJSON(t, rec.Body.Bytes()); got != tc.wantLabels {
+				t.Errorf("labels = %v, want %v", got, tc.wantLabels)
+			}
+		})
+	}
+}
+
+// TestUpdateMonitor_Labels covers PATCH's presence semantics: a label absent
+// from the body keeps its stored value, a present one replaces it, and null
+// or "" clears service and environment (kind can't be cleared).
+func TestUpdateMonitor_Labels(t *testing.T) {
+	stored := [3]string{`"Pagos"`, `"front"`, `"prod"`}
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantLabels [3]string // service, kind, environment as raw JSON
+		wantError  string
+	}{
+		{"absent labels are unchanged", `{"name":"Pagos Web","description":"x"}`, http.StatusOK, stored, ""},
+		{"set service", `{"name":"Pagos Web","service":"Backoffice"}`, http.StatusOK, [3]string{`"Backoffice"`, `"front"`, `"prod"`}, ""},
+		{"service is trimmed", `{"name":"Pagos Web","service":"  Backoffice "}`, http.StatusOK, [3]string{`"Backoffice"`, `"front"`, `"prod"`}, ""},
+		{"null service clears it", `{"name":"Pagos Web","service":null}`, http.StatusOK, [3]string{`null`, `"front"`, `"prod"`}, ""},
+		{"empty service clears it", `{"name":"Pagos Web","service":""}`, http.StatusOK, [3]string{`null`, `"front"`, `"prod"`}, ""},
+		{"set kind", `{"name":"Pagos Web","kind":"api"}`, http.StatusOK, [3]string{`"Pagos"`, `"api"`, `"prod"`}, ""},
+		{"set environment", `{"name":"Pagos Web","environment":"qa"}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `"qa"`}, ""},
+		{"null environment clears it", `{"name":"Pagos Web","environment":null}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `null`}, ""},
+		{"empty environment clears it", `{"name":"Pagos Web","environment":""}`, http.StatusOK, [3]string{`"Pagos"`, `"front"`, `null`}, ""},
+		{"set every label", `{"name":"Pagos Web","service":"Ejemplo","kind":"api","environment":"dev"}`, http.StatusOK, [3]string{`"Ejemplo"`, `"api"`, `"dev"`}, ""},
+		{"null kind", `{"name":"Pagos Web","kind":null}`, http.StatusBadRequest, stored, "El tipo debe ser front o api"},
+		{"unknown kind", `{"name":"Pagos Web","kind":"web"}`, http.StatusBadRequest, stored, "El tipo debe ser front o api"},
+		{"unknown environment", `{"name":"Pagos Web","environment":"staging"}`, http.StatusBadRequest, stored, "El ambiente debe ser dev, qa o prod"},
+		{"service over the limit", `{"name":"Pagos Web","service":"` + strings.Repeat("a", 81) + `"}`, http.StatusBadRequest, stored, "El servicio no puede superar los 80 caracteres"},
+		{"non-string service", `{"name":"Pagos Web","service":5}`, http.StatusBadRequest, stored, "El cuerpo de la solicitud no es JSON válido"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeStore()
+			created, _ := s.CreateMonitor(context.Background(), "Pagos Web", "", "https://example.com",
+				store.MonitorLabels{Service: "Pagos", Kind: "front", Environment: "prod"})
+			mux := newTestMux(s)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, authedRequest(http.MethodPatch, "/api/monitors/"+created.ID.String(), strings.NewReader(tc.body)))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantError != "" {
+				if msg := decodeError(t, rec); msg != tc.wantError {
+					t.Errorf("error = %q, want %q", msg, tc.wantError)
+				}
+			} else if got := labelsJSON(t, rec.Body.Bytes()); got != tc.wantLabels {
+				t.Errorf("response labels = %v, want %v", got, tc.wantLabels)
+			}
+
+			// What the store kept, read back the same way the list does.
+			persisted, err := json.Marshal(buildMonitorResponseFromStats(s.monitors[created.ID], 1, time.Now(), nil, false))
+			if err != nil {
+				t.Fatalf("marshal stored monitor: %v", err)
+			}
+			if got := labelsJSON(t, persisted); got != tc.wantLabels {
+				t.Errorf("stored labels = %v, want %v", got, tc.wantLabels)
+			}
+		})
+	}
+}
+
 func TestDeleteMonitor_NotFound(t *testing.T) {
 	mux := newTestMux(newFakeStore())
 
@@ -242,7 +394,7 @@ func TestDeleteMonitor_InvalidID(t *testing.T) {
 
 func TestDeleteMonitor_Success(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	req := authedRequest(http.MethodDelete, "/api/monitors/"+created.ID.String(), nil)
@@ -256,7 +408,7 @@ func TestDeleteMonitor_Success(t *testing.T) {
 
 func TestUpdateMonitor_Success(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "old desc", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "old desc", "https://example.com", defaultLabels)
 	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	req := authedRequest(
@@ -281,7 +433,7 @@ func TestUpdateMonitor_Success(t *testing.T) {
 
 func TestUpdateMonitor_EmptyName(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	req := authedRequest(
@@ -327,7 +479,7 @@ func TestUpdateMonitor_InvalidID(t *testing.T) {
 
 func TestListMonitors_IncludesCommit(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	m := s.monitors[created.ID]
 	m.LastCommit = pgtype.Text{String: "abc1234", Valid: true}
 	s.monitors[created.ID] = m
@@ -346,14 +498,50 @@ func TestListMonitors_IncludesCommit(t *testing.T) {
 	}
 }
 
+func TestListMonitors_IncludesLabels(t *testing.T) {
+	s := newFakeStore()
+	labeled, _ := s.CreateMonitor(context.Background(), "Pagos API", "", "https://example.com",
+		store.MonitorLabels{Service: "Pagos", Kind: "api", Environment: "qa"})
+	bare, _ := s.CreateMonitor(context.Background(), "Ejemplo", "", "https://example.org", defaultLabels)
+	mux := newTestMux(s)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/monitors", nil))
+
+	var got struct {
+		Monitors []json.RawMessage `json:"monitors"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := map[string][3]string{
+		labeled.ID.String(): {`"Pagos"`, `"api"`, `"qa"`},
+		bare.ID.String():    {`null`, `"api"`, `null`},
+	}
+	if len(got.Monitors) != len(want) {
+		t.Fatalf("got %d monitors, want %d", len(got.Monitors), len(want))
+	}
+	for _, raw := range got.Monitors {
+		var m struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("decode monitor: %v", err)
+		}
+		if labels := labelsJSON(t, raw); labels != want[m.ID] {
+			t.Errorf("monitor %s labels = %v, want %v", m.ID, labels, want[m.ID])
+		}
+	}
+}
+
 // TestListMonitors_GroupsStatsPerMonitor guards the one risk introduced by
 // batching the daily_stats query for the whole list into a single call: that
 // grouping the flat result by monitor_id could cross-attribute one
 // monitor's stats to another.
 func TestListMonitors_GroupsStatsPerMonitor(t *testing.T) {
 	s := newFakeStore()
-	a1, _ := s.CreateMonitor(context.Background(), "API A", "", "https://a.example.com")
-	a2, _ := s.CreateMonitor(context.Background(), "API B", "", "https://b.example.com")
+	a1, _ := s.CreateMonitor(context.Background(), "API A", "", "https://a.example.com", defaultLabels)
+	a2, _ := s.CreateMonitor(context.Background(), "API B", "", "https://b.example.com", defaultLabels)
 
 	today := pgtype.Date{Time: time.Now().UTC(), Valid: true}
 	s.allDailyStats = []db.DailyStat{
@@ -502,7 +690,7 @@ func TestHealthz_DoesNotRequireToken(t *testing.T) {
 
 func TestListMonitors_NoHistoryParamDefaultsToFull(t *testing.T) {
 	s := newFakeStore()
-	if _, err := s.CreateMonitor(context.Background(), "My API", "", "https://example.com"); err != nil {
+	if _, err := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels); err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
 	mux := newTestMux(s)
@@ -543,7 +731,7 @@ func TestListMonitors_InvalidHistory(t *testing.T) {
 // to infer full vs. recent from the array length.
 func TestListMonitors_HistoryRecent(t *testing.T) {
 	s := newFakeStore()
-	created, err := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, err := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}

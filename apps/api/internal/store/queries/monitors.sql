@@ -1,6 +1,6 @@
 -- name: CreateMonitor :one
-insert into monitors (name, description, url)
-values ($1, $2, $3)
+insert into monitors (name, description, url, service, kind, environment)
+values ($1, $2, $3, $4, $5, $6)
 returning *;
 
 -- name: ListMonitors :many
@@ -18,7 +18,10 @@ where id = $1;
 -- name: UpdateMonitorDetails :one
 update monitors
 set name = $2,
-    description = $3
+    description = $3,
+    service = $4,
+    kind = $5,
+    environment = $6
 where id = $1
 returning *;
 

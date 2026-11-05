@@ -70,12 +70,24 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
+// MonitorLabels are the fields that only organize a monitor on the
+// dashboard (grouping by service, filtering by environment). None of them
+// changes how the monitor is probed.
+type MonitorLabels struct {
+	Service     string // "" means no service (stored as NULL)
+	Kind        string // "front" or "api"
+	Environment string // "dev", "qa", "prod", or "" for none (stored as NULL)
+}
+
 // CreateMonitor inserts a new monitor in the pending state.
-func (s *Store) CreateMonitor(ctx context.Context, name, description, url string) (db.Monitor, error) {
+func (s *Store) CreateMonitor(ctx context.Context, name, description, url string, labels MonitorLabels) (db.Monitor, error) {
 	return s.queries.CreateMonitor(ctx, db.CreateMonitorParams{
 		Name:        name,
 		Description: description,
 		Url:         url,
+		Service:     optionalText(labels.Service),
+		Kind:        labels.Kind,
+		Environment: optionalText(labels.Environment),
 	})
 }
 
@@ -93,15 +105,18 @@ func (s *Store) GetMonitor(ctx context.Context, id uuid.UUID) (db.Monitor, error
 	return m, err
 }
 
-// UpdateMonitorDetails renames a monitor and/or changes its description.
+// UpdateMonitorDetails replaces a monitor's name, description and labels.
 // Its URL is intentionally not editable here: changing the probe target is a
 // bigger behavioral change than a rename and isn't part of this operation.
 // Returns ErrNotFound if no monitor with that id exists.
-func (s *Store) UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string) (db.Monitor, error) {
+func (s *Store) UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string, labels MonitorLabels) (db.Monitor, error) {
 	m, err := s.queries.UpdateMonitorDetails(ctx, db.UpdateMonitorDetailsParams{
 		ID:          id,
 		Name:        name,
 		Description: description,
+		Service:     optionalText(labels.Service),
+		Kind:        labels.Kind,
+		Environment: optionalText(labels.Environment),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.Monitor{}, ErrNotFound

@@ -29,7 +29,7 @@ func TestStore_RegisterAttempt(t *testing.T) {
 	}
 	defer s.Close()
 
-	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
@@ -106,13 +106,13 @@ func TestStore_UpdateMonitorDetails(t *testing.T) {
 	}
 	defer s.Close()
 
-	created, err := s.CreateMonitor(ctx, "original name", "original desc", "https://example.com/health")
+	created, err := s.CreateMonitor(ctx, "original name", "original desc", "https://example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
 	defer s.DeleteMonitor(ctx, created.ID)
 
-	updated, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc")
+	updated, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc", MonitorLabels{Service: "Pagos", Kind: "front", Environment: "prod"})
 	if err != nil {
 		t.Fatalf("UpdateMonitorDetails: %v", err)
 	}
@@ -122,9 +122,59 @@ func TestStore_UpdateMonitorDetails(t *testing.T) {
 	if updated.Url != created.Url {
 		t.Errorf("url changed to %q, want it untouched (%q)", updated.Url, created.Url)
 	}
+	if updated.Service.String != "Pagos" || !updated.Service.Valid || updated.Kind != "front" ||
+		updated.Environment.String != "prod" || !updated.Environment.Valid {
+		t.Errorf("labels = %+v/%q/%+v, want Pagos/front/prod", updated.Service, updated.Kind, updated.Environment)
+	}
 
-	if _, err := s.UpdateMonitorDetails(ctx, uuid.New(), "x", "y"); !errors.Is(err, ErrNotFound) {
+	// Empty service and environment are stored as NULL, not as "".
+	cleared, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc", MonitorLabels{Kind: "api"})
+	if err != nil {
+		t.Fatalf("UpdateMonitorDetails (clear labels): %v", err)
+	}
+	if cleared.Service.Valid || cleared.Environment.Valid || cleared.Kind != "api" {
+		t.Errorf("labels = %+v/%q/%+v, want NULL/api/NULL", cleared.Service, cleared.Kind, cleared.Environment)
+	}
+
+	if _, err := s.UpdateMonitorDetails(ctx, uuid.New(), "x", "y", MonitorLabels{Kind: "api"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateMonitorDetails on missing id: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStore_CreateMonitor_Labels(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	created, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", MonitorLabels{Service: "Backoffice", Kind: "front", Environment: "qa"})
+	if err != nil {
+		t.Fatalf("CreateMonitor: %v", err)
+	}
+	defer s.DeleteMonitor(ctx, created.ID)
+
+	got, err := s.GetMonitor(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetMonitor: %v", err)
+	}
+	if got.Service.String != "Backoffice" || got.Kind != "front" || got.Environment.String != "qa" {
+		t.Errorf("labels = %+v/%q/%+v, want Backoffice/front/qa", got.Service, got.Kind, got.Environment)
+	}
+
+	// The CHECK constraints are the last line of defense behind the HTTP
+	// validation.
+	for _, labels := range []MonitorLabels{{Kind: "web"}, {Kind: "api", Environment: "staging"}} {
+		if m, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", labels); err == nil {
+			s.DeleteMonitor(ctx, m.ID)
+			t.Errorf("CreateMonitor(%+v) succeeded, want a check constraint violation", labels)
+		}
 	}
 }
 
@@ -141,7 +191,7 @@ func TestStore_RegisterAttempt_PersistsCommit(t *testing.T) {
 	}
 	defer s.Close()
 
-	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
@@ -209,13 +259,13 @@ func TestStore_ListAllDailyStatsSince(t *testing.T) {
 	}
 	defer s.Close()
 
-	m1, err := s.CreateMonitor(ctx, "monitor A", "", "https://a.example.com/health")
+	m1, err := s.CreateMonitor(ctx, "monitor A", "", "https://a.example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
 	defer s.DeleteMonitor(ctx, m1.ID)
 
-	m2, err := s.CreateMonitor(ctx, "monitor B", "", "https://b.example.com/health")
+	m2, err := s.CreateMonitor(ctx, "monitor B", "", "https://b.example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
@@ -289,7 +339,7 @@ func TestStore_RegisterAttempt_PersistsStatusAndCheckedAt(t *testing.T) {
 	}
 	defer s.Close()
 
-	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
@@ -346,7 +396,7 @@ func TestStore_ListScheduledChecksBetween_FiltersAndOrders(t *testing.T) {
 	}
 	defer s.Close()
 
-	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health")
+	created, err := s.CreateMonitor(ctx, "test monitor", "created by store_test", "https://example.com/health", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}

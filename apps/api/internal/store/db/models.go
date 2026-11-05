@@ -43,4 +43,7 @@ type Monitor struct {
 	LastErrorKind       pgtype.Text        `db:"last_error_kind" json:"last_error_kind"`
 	CreatedAt           pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	LastCommit          pgtype.Text        `db:"last_commit" json:"last_commit"`
+	Service             pgtype.Text        `db:"service" json:"service"`
+	Kind                string             `db:"kind" json:"kind"`
+	Environment         pgtype.Text        `db:"environment" json:"environment"`
 }

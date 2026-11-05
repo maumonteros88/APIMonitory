@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -26,10 +27,10 @@ import (
 // satisfied by *store.Store; tests use an in-memory fake so they don't
 // depend on Postgres.
 type Store interface {
-	CreateMonitor(ctx context.Context, name, description, url string) (db.Monitor, error)
+	CreateMonitor(ctx context.Context, name, description, url string, labels store.MonitorLabels) (db.Monitor, error)
 	ListMonitors(ctx context.Context) ([]db.Monitor, error)
 	GetMonitor(ctx context.Context, id uuid.UUID) (db.Monitor, error)
-	UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string) (db.Monitor, error)
+	UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string, labels store.MonitorLabels) (db.Monitor, error)
 	DeleteMonitor(ctx context.Context, id uuid.UUID) error
 	ListDailyStatsSince(ctx context.Context, id uuid.UUID, since time.Time) ([]db.DailyStat, error)
 	ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]db.DailyStat, error)
@@ -150,6 +151,9 @@ type monitorResponse struct {
 	Name          string       `json:"name"`
 	Description   string       `json:"description"`
 	URL           string       `json:"url"`
+	Service       *string      `json:"service"`
+	Kind          string       `json:"kind"`
+	Environment   *string      `json:"environment"`
 	Status        string       `json:"status"`
 	Checking      bool         `json:"checking"`
 	LastCheck     *lastCheck   `json:"lastCheck"`
@@ -234,9 +238,43 @@ func (a *api) handleListMonitors(w http.ResponseWriter, r *http.Request) {
 }
 
 type createMonitorRequest struct {
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	Description string `json:"description"`
+	Name        string  `json:"name"`
+	URL         string  `json:"url"`
+	Description string  `json:"description"`
+	Service     *string `json:"service"`
+	Kind        *string `json:"kind"`
+	Environment *string `json:"environment"`
+}
+
+// maxServiceLength caps a monitor's service name, in characters (not bytes,
+// so accented names get the same room as plain ones).
+const maxServiceLength = 80
+
+// validateLabels checks already-normalized labels (service trimmed, absent
+// or null values turned into "") and returns the Spanish message to send
+// with a 400, or "" when they are all valid.
+func validateLabels(l store.MonitorLabels) string {
+	if utf8.RuneCountInString(l.Service) > maxServiceLength {
+		return "El servicio no puede superar los 80 caracteres"
+	}
+	if l.Kind != "front" && l.Kind != "api" {
+		return "El tipo debe ser front o api"
+	}
+	switch l.Environment {
+	case "", "dev", "qa", "prod":
+	default:
+		return "El ambiente debe ser dev, qa o prod"
+	}
+	return ""
+}
+
+// labelsOf returns m's current labels, as validateLabels expects them.
+func labelsOf(m db.Monitor) store.MonitorLabels {
+	return store.MonitorLabels{
+		Service:     m.Service.String,
+		Kind:        m.Kind,
+		Environment: m.Environment.String,
+	}
 }
 
 func (a *api) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
@@ -256,7 +294,24 @@ func (a *api) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := a.store.CreateMonitor(r.Context(), name, req.Description, req.URL)
+	// Absent or null labels fall back to no service, kind "api" and no
+	// environment.
+	labels := store.MonitorLabels{Kind: "api"}
+	if req.Service != nil {
+		labels.Service = strings.TrimSpace(*req.Service)
+	}
+	if req.Kind != nil {
+		labels.Kind = *req.Kind
+	}
+	if req.Environment != nil {
+		labels.Environment = *req.Environment
+	}
+	if msg := validateLabels(labels); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	created, err := a.store.CreateMonitor(r.Context(), name, req.Description, req.URL, labels)
 	if err != nil {
 		writeInternalError(w, err)
 		return
@@ -283,12 +338,43 @@ func (a *api) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateMonitorRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Service     optionalString `json:"service"`
+	Kind        optionalString `json:"kind"`
+	Environment optionalString `json:"environment"`
 }
 
-// handleUpdateMonitor renames a monitor and/or changes its description. Its
-// URL is deliberately not editable here (see Store.UpdateMonitorDetails).
+// optionalString is a PATCH body field that tells an absent field (Set is
+// false: keep the stored value) apart from an explicit null (Set is true and
+// Value is nil: clear it). encoding/json calls UnmarshalJSON only for fields
+// present in the body, including when their value is null.
+type optionalString struct {
+	Set   bool
+	Value *string
+}
+
+func (o *optionalString) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	return json.Unmarshal(data, &o.Value)
+}
+
+// apply returns current when the field was absent, "" when it was null, and
+// the sent value otherwise.
+func (o optionalString) apply(current string) string {
+	if !o.Set {
+		return current
+	}
+	if o.Value == nil {
+		return ""
+	}
+	return *o.Value
+}
+
+// handleUpdateMonitor renames a monitor, changes its description and sets
+// any of its labels (service, kind, environment) present in the body; a
+// label absent from the body keeps its stored value. Its URL is deliberately
+// not editable here (see Store.UpdateMonitorDetails).
 func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseMonitorID(w, r)
 	if !ok {
@@ -307,7 +393,25 @@ func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m, err := a.store.UpdateMonitorDetails(r.Context(), id, name, req.Description)
+	current, err := a.store.GetMonitor(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "El monitor no existe")
+			return
+		}
+		writeInternalError(w, err)
+		return
+	}
+	labels := labelsOf(current)
+	labels.Service = strings.TrimSpace(req.Service.apply(labels.Service))
+	labels.Kind = req.Kind.apply(labels.Kind)
+	labels.Environment = req.Environment.apply(labels.Environment)
+	if msg := validateLabels(labels); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	m, err := a.store.UpdateMonitorDetails(r.Context(), id, name, req.Description, labels)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "El monitor no existe")
@@ -414,8 +518,15 @@ func buildMonitorResponseFromStats(m db.Monitor, days int, today time.Time, stat
 		Name:        m.Name,
 		Description: m.Description,
 		URL:         m.Url,
+		Kind:        m.Kind,
 		Status:      m.Status,
 		Checking:    checking,
+	}
+	if m.Service.Valid {
+		resp.Service = &m.Service.String
+	}
+	if m.Environment.Valid {
+		resp.Environment = &m.Environment.String
 	}
 
 	if m.LastCheckedAt.Valid {

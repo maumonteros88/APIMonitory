@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"apimonitory/internal/events"
+	"apimonitory/internal/store"
 	"apimonitory/internal/store/db"
 )
 
@@ -200,7 +201,7 @@ func TestHandleEvents_ClientDisconnectUnsubscribes(t *testing.T) {
 
 func TestPublisher_MonitorChecked_PublishesWithCheckingFalse(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 
 	hub := events.NewHub()
 	ch := hub.Subscribe()
@@ -240,7 +241,7 @@ func TestPublisher_MonitorChecked_PublishesWithCheckingFalse(t *testing.T) {
 // the full defaultHistoryDays window.
 func TestPublisher_MonitorChecked_TrimsHistoryToRecentDays(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 
 	today := time.Now().UTC()
 	yesterday := today.AddDate(0, 0, -1)
@@ -271,6 +272,29 @@ func TestPublisher_MonitorChecked_TrimsHistoryToRecentDays(t *testing.T) {
 		wantToday := today.Format("2006-01-02")
 		if mr.History[0].Date != wantYesterday || mr.History[1].Date != wantToday {
 			t.Errorf("history dates = %q, %q, want %q, %q", mr.History[0].Date, mr.History[1].Date, wantYesterday, wantToday)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the published event")
+	}
+}
+
+func TestPublisher_MonitorChecked_IncludesLabels(t *testing.T) {
+	s := newFakeStore()
+	created, _ := s.CreateMonitor(context.Background(), "Backoffice Web", "", "https://example.com",
+		store.MonitorLabels{Service: "Backoffice", Kind: "front", Environment: "dev"})
+
+	hub := events.NewHub()
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	p := NewPublisher(s, time.UTC, hub)
+	p.MonitorChecked(context.Background(), created.ID)
+
+	select {
+	case ev := <-ch:
+		want := [3]string{`"Backoffice"`, `"front"`, `"dev"`}
+		if got := labelsJSON(t, ev.Data); got != want {
+			t.Errorf("event labels = %v, want %v", got, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for the published event")

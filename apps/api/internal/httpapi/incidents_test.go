@@ -259,7 +259,7 @@ func TestBuildIncidents_EmptyList(t *testing.T) {
 
 func TestHandleIncidents_MissingDay(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := newTestMux(s)
 
 	req := authedRequest(http.MethodGet, "/api/monitors/"+created.ID.String()+"/incidents", nil)
@@ -273,7 +273,7 @@ func TestHandleIncidents_MissingDay(t *testing.T) {
 
 func TestHandleIncidents_MalformedDay(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := newTestMux(s)
 
 	req := authedRequest(http.MethodGet, "/api/monitors/"+created.ID.String()+"/incidents?day=not-a-date", nil)
@@ -287,7 +287,7 @@ func TestHandleIncidents_MalformedDay(t *testing.T) {
 
 func TestHandleIncidents_FutureDay(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := newTestMux(s)
 
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
@@ -302,7 +302,7 @@ func TestHandleIncidents_FutureDay(t *testing.T) {
 
 func TestHandleIncidents_TooOldDay(t *testing.T) {
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := newTestMux(s)
 
 	tooOld := time.Now().UTC().AddDate(0, 0, -defaultHistoryDays).Format("2006-01-02")
@@ -352,7 +352,7 @@ func TestHandleIncidents_TimezoneCorrectness(t *testing.T) {
 	}
 
 	s := newFakeStore()
-	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
+	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com", defaultLabels)
 	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, loc, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	yesterday := time.Now().In(loc).AddDate(0, 0, -1)
