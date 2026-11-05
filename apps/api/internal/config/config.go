@@ -22,6 +22,9 @@ type Config struct {
 	DatabaseURL      string
 	APIToken         string
 	Port             string
+	// ListenAddr is the address the HTTP server binds to: loopback only
+	// when running behind ANCM, all interfaces otherwise.
+	ListenAddr string
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -110,7 +113,18 @@ func Load() (Config, error) {
 	}
 	cfg.APIToken = apiToken
 
-	cfg.Port = stringEnv("PORT", "8080")
+	// Behind IIS (ASP.NET Core Module, out-of-process) the module picks the
+	// port the app must listen on and hands it over in ASPNETCORE_PORT, so
+	// it takes precedence over the generic PORT. ANCM reaches the app on
+	// 127.0.0.1 only, so in that case bind loopback and don't expose the
+	// port on other interfaces.
+	if p := os.Getenv("ASPNETCORE_PORT"); p != "" {
+		cfg.Port = p
+		cfg.ListenAddr = "127.0.0.1:" + p
+	} else {
+		cfg.Port = stringEnv("PORT", "8080")
+		cfg.ListenAddr = ":" + cfg.Port
+	}
 
 	return cfg, nil
 }

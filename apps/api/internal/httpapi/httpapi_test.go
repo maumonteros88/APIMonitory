@@ -126,12 +126,16 @@ const testToken = "test-token"
 // never trip the gap-breaks-a-run behavior incidental to these tests.
 const testMaxGap = 3 * time.Minute
 
+const testCommit = "abc1234"
+
+const testBuild = "deploy-20260101-000000-abc1234"
+
 func newTestMux(s *fakeStore) *http.ServeMux {
 	return newTestMuxWithHub(s, events.NewHub())
 }
 
 func newTestMuxWithHub(s *fakeStore, hub *events.Hub) *http.ServeMux {
-	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, hub, time.Millisecond*20, testMaxGap)
+	return New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, hub, time.Millisecond*20, testMaxGap, testCommit, testBuild)
 }
 
 // authedRequest builds a request carrying the shared-secret bearer token, as
@@ -239,7 +243,7 @@ func TestDeleteMonitor_InvalidID(t *testing.T) {
 func TestDeleteMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	req := authedRequest(http.MethodDelete, "/api/monitors/"+created.ID.String(), nil)
 	rec := httptest.NewRecorder()
@@ -253,7 +257,7 @@ func TestDeleteMonitor_Success(t *testing.T) {
 func TestUpdateMonitor_Success(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "old desc", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	req := authedRequest(
 		http.MethodPatch,
@@ -278,7 +282,7 @@ func TestUpdateMonitor_Success(t *testing.T) {
 func TestUpdateMonitor_EmptyName(t *testing.T) {
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, time.UTC, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	req := authedRequest(
 		http.MethodPatch,
@@ -406,6 +410,14 @@ func TestHealthz(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["status"] != "ok" || body["commit"] != testCommit ||
+		body["build"] != testBuild {
+		t.Fatalf("body = %v, want status ok, commit %q, build %q", body, testCommit, testBuild)
 	}
 }
 

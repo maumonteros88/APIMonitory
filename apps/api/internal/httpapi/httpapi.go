@@ -65,6 +65,8 @@ type api struct {
 	hub          *events.Hub
 	sseHeartbeat time.Duration
 	maxGap       time.Duration
+	commit       string // build identity, reported by /healthz
+	build        string // unique release id, reported by /healthz
 }
 
 // New builds the API routes on a fresh http.ServeMux. bgCtx is used as the
@@ -78,8 +80,10 @@ type api struct {
 // comment to hold the connection open through an idle-timeout proxy. maxGap
 // is how far apart two scheduled checks can be before handleIncidents treats
 // the gap itself as ending a down/degraded run (see main.go for how it's
-// computed).
-func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string, hub *events.Hub, sseHeartbeat time.Duration, maxGap time.Duration) *http.ServeMux {
+// computed). commit and build identify the binary (git commit, unique
+// release id) and are reported by GET /healthz so a deploy can confirm
+// which one is live.
+func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration, loc *time.Location, token string, hub *events.Hub, sseHeartbeat time.Duration, maxGap time.Duration, commit string, build string) *http.ServeMux {
 	a := &api{
 		store:        s,
 		scheduler:    sched,
@@ -90,6 +94,8 @@ func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration
 		hub:          hub,
 		sseHeartbeat: sseHeartbeat,
 		maxGap:       maxGap,
+		commit:       commit,
+		build:        build,
 	}
 
 	mux := http.NewServeMux()
@@ -129,7 +135,7 @@ func (a *api) requireToken(next http.HandlerFunc) http.Handler {
 }
 
 func (a *api) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "commit": a.commit, "build": a.build})
 }
 
 type monitorsResponse struct {

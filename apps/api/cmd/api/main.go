@@ -22,6 +22,14 @@ import (
 	"apimonitory/internal/webui"
 )
 
+// commit identifies the build. Overridden at link time by the release build
+// (-ldflags "-X main.commit=<short sha>"); /healthz reports it.
+var commit = "dev"
+
+// build is a unique id per release (-X main.build=<id>), so two releases of
+// the same commit can be told apart. /healthz reports it too.
+var build = "dev"
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 
@@ -85,7 +93,7 @@ func main() {
 	// further still.
 	maxGap := 2*cfg.CheckInterval + cfg.RetryDelay + 2*cfg.CheckTimeout
 
-	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken, hub, cfg.SSEHeartbeat, maxGap)
+	mux := httpapi.New(st, sched, appCtx, cfg.CheckInterval, cfg.AppTimezone, cfg.APIToken, hub, cfg.SSEHeartbeat, maxGap, commit, build)
 
 	spa, err := webui.Handler()
 	if err != nil {
@@ -96,7 +104,7 @@ func main() {
 	mux.Handle("/", spa)
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              cfg.ListenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -112,7 +120,7 @@ func main() {
 	// even if nothing is listening on the other end yet.
 	serveErr := make(chan error, 1)
 	go func() {
-		slog.Info("starting server", "port", cfg.Port, "timezone", cfg.AppTimezone.String())
+		slog.Info("starting server", "addr", cfg.ListenAddr, "timezone", cfg.AppTimezone.String())
 		err := srv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err

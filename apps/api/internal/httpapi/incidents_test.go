@@ -353,7 +353,7 @@ func TestHandleIncidents_TimezoneCorrectness(t *testing.T) {
 
 	s := newFakeStore()
 	created, _ := s.CreateMonitor(context.Background(), "My API", "", "https://example.com")
-	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, loc, testToken, events.NewHub(), time.Millisecond*20, testMaxGap)
+	mux := New(s, fakeScheduler{}, context.Background(), time.Minute, loc, testToken, events.NewHub(), time.Millisecond*20, testMaxGap, testCommit, testBuild)
 
 	yesterday := time.Now().In(loc).AddDate(0, 0, -1)
 	dayStr := yesterday.Format("2006-01-02")
