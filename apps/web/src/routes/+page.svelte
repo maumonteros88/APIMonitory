@@ -25,10 +25,19 @@
 	} from '$lib/api';
 	import { getToken, setToken } from '$lib/auth';
 	import { ago } from '$lib/format';
+	import {
+		ENV_FILTERS,
+		ENV_LABELS,
+		envCounts,
+		filterByEnv,
+		isEnvFilter,
+		serviceNames,
+		type EnvFilter
+	} from '$lib/grouping';
 	import AddMonitorForm from '$lib/components/AddMonitorForm.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import MonitorBoard from '$lib/components/MonitorBoard.svelte';
-	import MonitorCard from '$lib/components/MonitorCard.svelte';
+	import MonitorList from '$lib/components/MonitorList.svelte';
 	import StatusBanner from '$lib/components/StatusBanner.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import TokenGate from '$lib/components/TokenGate.svelte';
@@ -49,6 +58,7 @@
 	const NOW_TICK_MS = 15000;
 	const THEME_KEY = 'apimonitory_theme';
 	const VIEW_KEY = 'apimonitory_view';
+	const ENV_KEY = 'apimonitory_env';
 	const DAYS_CAPTION = 'Disponibilidad de los últimos 90 días';
 
 	let authenticated = $state(getToken() !== null);
@@ -88,6 +98,13 @@
 
 	let theme = $state<'light' | 'dark'>('light');
 	let view = $state<'list' | 'board'>('list');
+	let env = $state<EnvFilter>('all');
+
+	// Everything below the filter (banners, list, board) only sees the
+	// monitors in the selected environment.
+	const visibleMonitors = $derived(filterByEnv(monitors, env));
+	const envMonitorCounts = $derived(envCounts(monitors));
+	const knownServices = $derived(serviceNames(monitors));
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let nowTickHandle: ReturnType<typeof setInterval> | undefined;
@@ -125,6 +142,15 @@
 			localStorage.setItem(VIEW_KEY, next);
 		} catch {
 			// Storage unavailable: the toggle still works for this tab.
+		}
+	}
+
+	function setEnv(next: EnvFilter) {
+		env = next;
+		try {
+			localStorage.setItem(ENV_KEY, next);
+		} catch {
+			// Storage unavailable: the filter still works for this tab.
 		}
 	}
 
@@ -323,7 +349,10 @@
 			if (editingMonitor) {
 				const updated = await updateMonitor(editingMonitor.id, {
 					name: input.name,
-					description: input.description
+					description: input.description,
+					service: input.service,
+					kind: input.kind,
+					environment: input.environment
 				});
 				monitors = upsertMonitor(monitors, updated);
 			} else {
@@ -375,8 +404,11 @@
 		try {
 			const savedView = localStorage.getItem(VIEW_KEY);
 			if (savedView === 'board' || savedView === 'list') view = savedView;
+			const savedEnv = localStorage.getItem(ENV_KEY);
+			if (isEnvFilter(savedEnv)) env = savedEnv;
 		} catch {
-			// Storage unavailable: defaults to list view for this tab.
+			// Storage unavailable: defaults to the list view and every
+			// environment for this tab.
 		}
 		const unsubscribe = onUnauthorized(handleUnauthorized);
 		document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -402,7 +434,7 @@
 </script>
 
 <svelte:head>
-	<title>Estado de APIs · GOIAR</title>
+	<title>Estado de servicios · GOIAR</title>
 </svelte:head>
 
 {#if !authenticated}
@@ -412,7 +444,7 @@
 		<header class="page-header">
 			<div class="titles">
 				<span class="eyebrow">GOIAR</span>
-				<h1>Estado de APIs</h1>
+				<h1>Estado de servicios</h1>
 			</div>
 			<div class="actions">
 				<div class="view-switch">
@@ -442,10 +474,28 @@
 				</button>
 				<button type="button" class="primary" onclick={toggleCreateForm}>
 					<Icon name="add-line" />
-					Agregar API
+					Agregar monitor
 				</button>
 			</div>
 		</header>
+
+		<div class="env-filter">
+			<span class="env-filter-label" id="env-filter-label">Ambiente</span>
+			<div class="view-switch" role="group" aria-labelledby="env-filter-label">
+				{#each ENV_FILTERS as option (option)}
+					<button
+						type="button"
+						class="view-option"
+						class:active={env === option}
+						aria-pressed={env === option}
+						onclick={() => setEnv(option)}
+					>
+						{option === 'all' ? 'Todos' : ENV_LABELS[option]}
+						<span class="env-count">{envMonitorCounts[option]}</span>
+					</button>
+				{/each}
+			</div>
+		</div>
 
 		{#if connectionError}
 			<div class="connection-banner">
@@ -458,13 +508,15 @@
 		{/if}
 
 		{#if hasLoadedOnce}
-			<StatusBanner {monitors} {intervalSeconds} />
+			<StatusBanner monitors={visibleMonitors} {env} {intervalSeconds} />
 		{/if}
 
 		{#if formOpen || editingMonitor}
 			{#key editingMonitor?.id ?? 'new'}
 				<AddMonitorForm
 					{editingMonitor}
+					services={knownServices}
+					defaultEnvironment={env === 'all' ? null : env}
 					error={formError}
 					submitting={formSubmitting}
 					onCancel={closeForm}
@@ -484,27 +536,35 @@
 					</div>
 				</div>
 			</section>
-		{:else if hasLoadedOnce && view === 'board'}
-			<MonitorBoard {monitors} daysCaption={DAYS_CAPTION} onCheck={handleCheck} />
-		{:else if hasLoadedOnce}
+		{:else if hasLoadedOnce && visibleMonitors.length === 0}
 			<section class="monitor-list-section">
 				<div class="list-caption">{DAYS_CAPTION}</div>
 				<div class="monitor-list">
-					{#if monitors.length === 0}
-						<div class="empty-state">
-							<Icon name="pulse-line" size={32} />
-							<p class="empty-title">No hay APIs para monitorear</p>
+					<div class="empty-state">
+						<Icon name="pulse-line" size={32} />
+						{#if monitors.length === 0 || env === 'all'}
+							<p class="empty-title">Todavía no hay monitores</p>
 							<p class="empty-sub">
-								Agrega la URL de health de una API para empezar a ver su estado.
+								Agrega la URL de un front o el endpoint de health de una API para empezar.
 							</p>
-						</div>
-					{:else}
-						{#each monitors as monitor (monitor.id)}
-							<MonitorCard {monitor} onCheck={handleCheck} onEdit={handleEdit} onDelete={handleDelete} />
-						{/each}
-					{/if}
+						{:else}
+							<p class="empty-title">No hay monitores en {ENV_LABELS[env]}</p>
+							<p class="empty-sub">Elige otro ambiente o agrega un monitor en {ENV_LABELS[env]}.</p>
+						{/if}
+					</div>
 				</div>
 			</section>
+		{:else if hasLoadedOnce && view === 'board'}
+			<MonitorBoard monitors={visibleMonitors} {env} daysCaption={DAYS_CAPTION} onCheck={handleCheck} />
+		{:else if hasLoadedOnce}
+			<MonitorList
+				monitors={visibleMonitors}
+				showEnv={env === 'all'}
+				daysCaption={DAYS_CAPTION}
+				onCheck={handleCheck}
+				onEdit={handleEdit}
+				onDelete={handleDelete}
+			/>
 		{/if}
 
 		<footer class="build-info">
@@ -556,6 +616,7 @@
 		display: flex;
 		gap: 8px;
 		align-items: center;
+		flex-wrap: wrap;
 	}
 
 	/* Direct child only, so the segmented view-switch's own buttons (nested
@@ -579,13 +640,15 @@
 		background: var(--m-soft);
 	}
 
-	.primary {
+	/* Scoped like .actions > button, or that rule's higher specificity would
+	   override these colors. */
+	.actions > .primary {
 		border: 0;
 		background: var(--primary-500);
 		color: #fff;
 	}
 
-	.primary:hover {
+	.actions > .primary:hover {
 		background: var(--primary-700);
 	}
 
@@ -617,6 +680,29 @@
 	.view-option.active {
 		background: var(--m-ink);
 		color: var(--m-surface);
+	}
+
+	.env-filter {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
+	.env-filter-label {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--fg-2);
+	}
+
+	.env-filter .view-option {
+		padding: 0 14px;
+	}
+
+	.env-count {
+		font-size: 12px;
+		font-weight: 400;
+		opacity: 0.75;
 	}
 
 	.connection-banner {
@@ -661,10 +747,6 @@
 		background: var(--m-surface);
 		border: 1px solid var(--border-default);
 		border-radius: 8px;
-	}
-
-	.monitor-list :global(article + article) {
-		border-top: 1px solid var(--border-subtle);
 	}
 
 	.empty-state {

@@ -3,7 +3,11 @@
 	import { dayColor } from '$lib/format';
 	import DayTooltip from './DayTooltip.svelte';
 
-	let { history, monitorId }: { history: DayHistory[]; monitorId: string } = $props();
+	let {
+		history,
+		monitorId,
+		height = 34
+	}: { history: DayHistory[]; monitorId: string; height?: number } = $props();
 
 	let hoveredDate = $state<string | null>(null);
 	let tooltipPos = $state({ x: 0, y: 0 });
@@ -24,7 +28,7 @@
 	}
 </script>
 
-<div class="bars" onmouseleave={hideTooltip} role="img" aria-label="Disponibilidad diaria de los últimos {history.length} días">
+<div class="bars" style="height: {height}px" onmouseleave={hideTooltip} role="img" aria-label="Disponibilidad diaria de los últimos {history.length} días">
 	{#each history as day (day.date)}
 		<div
 			class="bar"
@@ -44,7 +48,6 @@
 	.bars {
 		display: flex;
 		gap: 2px;
-		height: 34px;
 	}
 
 	.bar {

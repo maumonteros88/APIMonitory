@@ -280,3 +280,12 @@ html[data-theme='dark'] {
 body {
 	margin: 0;
 }
+
+/* Browsers give form controls their own system font instead of inheriting
+   it, which would leave every button and input outside Sora. */
+button,
+input,
+textarea,
+select {
+	font-family: inherit;
+}

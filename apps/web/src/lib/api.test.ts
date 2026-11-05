@@ -15,6 +15,9 @@ function makeMonitor(id: string, at: string | null, history: DayHistory[] = []):
 		name: id,
 		description: '',
 		url: 'https://example.com',
+		service: null,
+		kind: 'api',
+		environment: null,
 		status: 'up',
 		checking: false,
 		lastCheck: at ? { at, httpStatus: 200, latencyMs: 10, errorKind: '' } : null,
@@ -133,6 +136,21 @@ describe('applyMonitorDelta', () => {
 		]);
 		expect(history[3].checks).toBe(2); // yesterday, replaced in place
 		expect(history[4].checks).toBe(1); // today, appended
+	});
+
+	it('takes the delta’s labels (service, kind, environment) along with its history', () => {
+		const current = [makeMonitor('a', '2026-01-05T00:00:00Z', [makeDay('2026-01-05')])];
+		const update: Monitor = {
+			...makeMonitor('a', '2026-01-05T00:01:00Z', [makeDay('2026-01-05')]),
+			service: 'Pagos',
+			kind: 'front',
+			environment: 'prod'
+		};
+
+		const result = applyMonitorDelta(current, update);
+
+		expect(result.needsResync).toBe(false);
+		expect(result.monitors[0]).toMatchObject({ service: 'Pagos', kind: 'front', environment: 'prod' });
 	});
 
 	it('applies a same-day delta as an in-place replace, with no reordering', () => {

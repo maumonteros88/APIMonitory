@@ -29,11 +29,20 @@ export interface IncidentsResponse {
 	partial: boolean;
 }
 
+/** What a monitor points at. Only a label for grouping: both kinds are probed
+ * the same way (any 2xx response is up). */
+export type MonitorKind = 'front' | 'api';
+
+export type Environment = 'dev' | 'qa' | 'prod';
+
 export interface Monitor {
 	id: string;
 	name: string;
 	description: string;
 	url: string;
+	service: string | null;
+	kind: MonitorKind;
+	environment: Environment | null;
 	status: 'pending' | 'up' | 'degraded' | 'down';
 	checking: boolean;
 	lastCheck: LastCheck | null;
@@ -53,11 +62,19 @@ export interface NewMonitorInput {
 	name: string;
 	url: string;
 	description: string;
+	service: string | null;
+	kind: MonitorKind;
+	environment: Environment | null;
 }
 
+/** PATCH body: a label left out keeps its stored value; null clears service
+ * or environment. */
 export interface MonitorDetailsInput {
 	name: string;
 	description: string;
+	service?: string | null;
+	kind?: MonitorKind;
+	environment?: Environment | null;
 }
 
 export class ApiError extends Error {
