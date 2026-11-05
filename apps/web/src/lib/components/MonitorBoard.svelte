@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Monitor } from '$lib/api';
+	import type { Environment, Monitor, MonitorKind } from '$lib/api';
 	import { ago, statusMeta, tileStyle, uptimeShort } from '$lib/format';
 	import {
 		ENV_LABELS,
@@ -11,17 +11,32 @@
 		type EnvFilter,
 		type Segment
 	} from '$lib/grouping';
+	import type { Period } from '$lib/period';
+	import Icon from './Icon.svelte';
+	import PeriodSelect from './PeriodSelect.svelte';
 
-	// monitors are the ones visible under env. Under 'all' the board is a
-	// services × environments matrix; otherwise one card per service.
+	// monitors are the ones visible under the filters, already carrying the
+	// selected period's uptime. Under 'all' the board is a services ×
+	// environments matrix; otherwise one card per service. A missing kind or
+	// an empty cell offers onAdd, prefilled from where it was clicked.
 	let {
 		monitors,
 		env,
-		daysCaption,
-		onCheck
-	}: { monitors: Monitor[]; env: EnvFilter; daysCaption: string; onCheck: (id: string) => void } = $props();
+		days,
+		onDaysChange,
+		onCheck,
+		onAdd
+	}: {
+		monitors: Monitor[];
+		env: EnvFilter;
+		days: Period;
+		onDaysChange: (days: Period) => void;
+		onCheck: (id: string) => void;
+		onAdd: (service: string, kind: MonitorKind, environment: Environment) => void;
+	} = $props();
 
-	const board = $derived(env === 'all' ? null : buildBoard(monitors));
+	const boardEnv = $derived(env === 'all' ? null : env);
+	const board = $derived(boardEnv ? buildBoard(monitors) : null);
 	const matrix = $derived(env === 'all' ? buildMatrix(monitors) : null);
 
 	function latency(m: Monitor): string {
@@ -39,7 +54,7 @@
 	}
 </script>
 
-{#snippet segment(seg: Segment, compact: boolean)}
+{#snippet segment(seg: Segment, compact: boolean, service: string, cellEnv: Environment)}
 	{#if seg.monitor}
 		{@const m = seg.monitor}
 		{@const style = tileStyle(m.status, m.uptimePercent)}
@@ -61,7 +76,13 @@
 			</span>
 		</button>
 	{:else}
-		<div class="segment-missing" class:compact>Sin {seg.kind === 'front' ? 'front' : 'API'}</div>
+		{@const kindWord = seg.kind === 'front' ? 'front' : 'API'}
+		<!-- The hidden suffix tells apart the many "Agregar API" buttons for a
+		     screen reader without changing what is visible. -->
+		<button type="button" class="segment-add" class:compact onclick={() => onAdd(service, seg.kind, cellEnv)}>
+			<Icon name="add-line" size={compact ? 16 : 18} />
+			<span>Agregar {kindWord}<span class="visually-hidden"> · {service} · {ENV_LABELS[cellEnv]}</span></span>
+		</button>
 	{/if}
 {/snippet}
 
@@ -103,10 +124,10 @@
 			<span class="legend-item"><span class="legend-dot" style="background: #FFC700"></span>Degradada</span>
 			<span class="legend-item"><span class="legend-dot" style="background: #DF4730"></span>Sin respuesta</span>
 		</div>
-		<span class="days-caption">{daysCaption}</span>
+		<PeriodSelect value={days} onChange={onDaysChange} />
 	</div>
 
-	{#if board}
+	{#if board && boardEnv}
 		{#if board.cards.length > 0}
 			<div class="cards">
 				{#each board.cards as card (card.service)}
@@ -116,7 +137,7 @@
 							<span class="meta">{card.meta}</span>
 						</div>
 						{#each card.segments as seg (segmentKey(seg))}
-							{@render segment(seg, false)}
+							{@render segment(seg, false, card.service, boardEnv)}
 						{/each}
 					</article>
 				{/each}
@@ -143,11 +164,16 @@
 							</div>
 							{#each row.cells as cell (cell.env)}
 								{#if cell.segments.length === 0}
-									<div class="cell-empty">Sin monitores</div>
+									<button type="button" class="cell-empty" onclick={() => onAdd(row.service, 'api', cell.env)}>
+										<Icon name="add-line" size={16} />
+										<span>
+											Agregar en {ENV_LABELS[cell.env]}<span class="visually-hidden"> · {row.service}</span>
+										</span>
+									</button>
 								{:else}
 									<div class="cell-segments">
 										{#each cell.segments as seg (segmentKey(seg))}
-											{@render segment(seg, true)}
+											{@render segment(seg, true, row.service, cell.env)}
 										{/each}
 									</div>
 								{/if}
@@ -198,10 +224,6 @@
 		border-radius: 2px;
 	}
 
-	.days-caption {
-		font-size: 14px;
-	}
-
 	.section-header {
 		display: flex;
 		align-items: baseline;
@@ -223,7 +245,7 @@
 
 	.cards {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 		gap: 8px;
 	}
 
@@ -299,22 +321,52 @@
 		white-space: nowrap;
 	}
 
-	.segment-missing {
+	.segment-add {
 		min-height: 80px;
 		box-sizing: border-box;
 		display: flex;
 		align-items: center;
+		gap: 8px;
 		padding: 12px 16px;
+		border: 0;
 		background: var(--m-soft);
-		font-size: 12px;
-		color: var(--fg-2);
+		color: var(--fg-1);
+		font-size: 14px;
+		font-weight: 700;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.segment-add:hover {
+		background: var(--border-default);
+	}
+
+	.segment-add :global(svg) {
+		flex-shrink: 0;
 	}
 
 	.segment.compact,
-	.segment-missing.compact {
+	.segment-add.compact {
 		min-height: 52px;
 		padding: 8px 12px;
 		gap: 8px;
+	}
+
+	/* Inside a matrix cell the missing kind reads as an empty slot. */
+	.segment-add.compact {
+		justify-content: center;
+		gap: 6px;
+		border: 1px dashed var(--border-default);
+		border-radius: 2px;
+		background: var(--m-surface);
+		color: var(--m-sub-tx);
+		font-size: 12px;
+		font-weight: 600;
+	}
+
+	.segment-add.compact:hover {
+		background: var(--m-soft);
+		color: var(--fg-1);
 	}
 
 	.segment.compact .segment-info,
@@ -348,7 +400,7 @@
 		grid-template-columns: 168px repeat(3, minmax(0, 1fr));
 		gap: 8px;
 		padding: 12px 0;
-		align-items: start;
+		align-items: stretch;
 	}
 
 	.matrix-row + .matrix-row {
@@ -365,6 +417,7 @@
 	.matrix-service {
 		display: flex;
 		flex-direction: column;
+		align-self: start;
 		gap: 2px;
 		padding-top: 6px;
 		min-width: 0;
@@ -385,17 +438,49 @@
 		background: var(--m-surface);
 	}
 
+	/* Cells of a row share its height, so a cell's segments (or its add
+	   slot) fill it instead of leaving a gap under a shorter cell. */
+	.cell-segments > .segment,
+	.cell-segments > .segment-add {
+		flex: 1;
+	}
+
 	.cell-empty {
 		min-height: 106px;
 		box-sizing: border-box;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		gap: 6px;
 		padding: 0 12px;
 		border: 1px dashed var(--border-default);
 		border-radius: 4px;
+		background: none;
 		font-size: 12px;
-		color: var(--fg-2);
+		font-weight: 600;
+		color: var(--m-sub-tx);
+		cursor: pointer;
+	}
+
+	.cell-empty:hover {
+		background: var(--m-soft);
+		color: var(--fg-1);
+	}
+
+	/* Abspos needs a positioned ancestor inside the matrix's scroll box, or
+	   a hidden suffix past the viewport edge widens the whole page. */
+	.segment-add,
+	.cell-empty {
+		position: relative;
+	}
+
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
 	}
 
 	.unassigned {

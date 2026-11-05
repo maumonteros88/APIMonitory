@@ -1,14 +1,31 @@
 <script lang="ts">
 	import type { Monitor } from '$lib/api';
+	import { buildOutside, type OutsideItem } from '$lib/filters';
 	import { buildBanners, summaryLine, type Banner, type EnvFilter } from '$lib/grouping';
 	import Icon, { type IconName } from './Icon.svelte';
+	import OutsideFilterStrip from './OutsideFilterStrip.svelte';
 
-	// monitors are the ones visible under env: hidden ones never count.
+	// monitors are the ones visible under the filters and drive the banners;
+	// all is every monitor, so failures the filters hide still get a strip.
 	let {
 		monitors,
+		all,
 		env,
-		intervalSeconds
-	}: { monitors: Monitor[]; env: EnvFilter; intervalSeconds: number } = $props();
+		services,
+		intervalSeconds,
+		onFocusService,
+		onReveal,
+		onClearFilters
+	}: {
+		monitors: Monitor[];
+		all: Monitor[];
+		env: EnvFilter;
+		services: string[];
+		intervalSeconds: number;
+		onFocusService: (service: string | null) => void;
+		onReveal: (item: OutsideItem) => void;
+		onClearFilters: () => void;
+	} = $props();
 
 	const ICONS: Record<Banner['level'], IconName> = {
 		bad: 'close-circle-fill',
@@ -17,8 +34,9 @@
 		none: 'pulse-line'
 	};
 
-	const banners = $derived(buildBanners(monitors, env));
-	const summary = $derived(summaryLine(monitors.length, env, intervalSeconds));
+	const banners = $derived(buildBanners(monitors, env, all.length));
+	const outside = $derived(buildOutside(all, monitors));
+	const summary = $derived(summaryLine(monitors.length, env, intervalSeconds, services));
 </script>
 
 <div class="banners">
@@ -29,12 +47,17 @@
 			{#if banner.items.length > 0}
 				<span class="chips">
 					{#each banner.items as item (item.id)}
-						<span class="chip">{item.label}{#if item.env}<span class="chip-env">{item.env}</span>{/if}</span>
+						<button type="button" class="chip" title="Ver solo este servicio" onclick={() => onFocusService(item.service)}>
+							{item.label}{#if item.env}<span class="chip-env">{item.env}</span>{/if}
+						</button>
 					{/each}
 				</span>
 			{/if}
 		</div>
 	{/each}
+	{#if outside}
+		<OutsideFilterStrip strip={outside} {onReveal} {onClearFilters} />
+	{/if}
 	{#if summary}<span class="summary">{summary}</span>{/if}
 </div>
 
@@ -78,11 +101,16 @@
 		background: var(--m-surface);
 		border: 1px solid var(--banner-border);
 		color: var(--m-ink);
+		cursor: pointer;
+	}
+
+	.chip:hover {
+		border-color: var(--m-ink);
 	}
 
 	.chip-env {
 		font-weight: 400;
-		color: var(--fg-2);
+		color: var(--m-sub-tx);
 	}
 
 	.summary {

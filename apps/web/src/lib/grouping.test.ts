@@ -160,6 +160,10 @@ describe('buildBanners', () => {
 		expect(buildBanners([], 'prod')).toEqual([{ level: 'none', text: 'Sin monitores configurados', items: [] }]);
 	});
 
+	it('says the filters hide everything when monitors exist but none is visible', () => {
+		expect(buildBanners([], 'prod', 3)).toEqual([{ level: 'none', text: 'Sin monitores en este filtro', items: [] }]);
+	});
+
 	it('says everything is fine when nothing is down or degraded (pending included)', () => {
 		const banners = buildBanners(
 			[makeMonitor('a', 'Pagos', 'api', 'prod'), makeMonitor('b', 'Pagos', 'front', 'prod', { status: 'pending' })],
@@ -185,14 +189,14 @@ describe('buildBanners', () => {
 				level: 'bad',
 				text: '2 monitores sin respuesta',
 				items: [
-					{ id: 'down-bo', label: 'Backoffice · API', env: '' },
-					{ id: 'down-pagos', label: 'Pagos · Front', env: '' }
+					{ id: 'down-bo', label: 'Backoffice · API', env: '', service: 'Backoffice' },
+					{ id: 'down-pagos', label: 'Pagos · Front', env: '', service: 'Pagos' }
 				]
 			},
 			{
 				level: 'warn',
 				text: '1 monitor con rendimiento degradado',
-				items: [{ id: 'deg', label: 'Pagos · API', env: '' }]
+				items: [{ id: 'deg', label: 'Pagos · API', env: '', service: 'Pagos' }]
 			}
 		]);
 	});
@@ -204,11 +208,11 @@ describe('buildBanners', () => {
 		];
 
 		expect(buildBanners(monitors, 'all')[0].items).toEqual([
-			{ id: 'pagos', label: 'Pagos · API', env: ' · QA' },
-			{ id: 'API de ejemplo', label: 'API de ejemplo', env: '' }
+			{ id: 'pagos', label: 'Pagos · API', env: ' · QA', service: 'Pagos' },
+			{ id: 'API de ejemplo', label: 'API de ejemplo', env: '', service: null }
 		]);
 		expect(buildBanners(monitors.slice(1), 'qa')[0].items).toEqual([
-			{ id: 'pagos', label: 'Pagos · API', env: '' }
+			{ id: 'pagos', label: 'Pagos · API', env: '', service: 'Pagos' }
 		]);
 	});
 });
@@ -229,6 +233,12 @@ describe('intervalLabel and summaryLine', () => {
 
 	it('is empty when no monitor is visible', () => {
 		expect(summaryLine(0, 'prod', 60)).toBe('');
+	});
+
+	it('names the selected services: one by name, no service, or how many', () => {
+		expect(summaryLine(2, 'prod', 60, ['Pagos'])).toBe('2 monitores de Pagos en Prod · se verifica cada 1 min');
+		expect(summaryLine(1, 'all', 60, [''])).toBe('1 monitor sin servicio en todos los ambientes · se verifica cada 1 min');
+		expect(summaryLine(5, 'qa', 60, ['Pagos', 'Backoffice'])).toBe('5 monitores de 2 servicios en QA · se verifica cada 1 min');
 	});
 });
 

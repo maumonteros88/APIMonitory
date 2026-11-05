@@ -1,16 +1,21 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import type { Environment, Monitor, MonitorKind, NewMonitorInput } from '$lib/api';
 	import Icon from './Icon.svelte';
 
 	// When set, the form edits this monitor instead of creating a new one.
 	// Its URL is shown but locked: changing the probe target is a bigger
 	// change than a rename and isn't part of this form. services feeds the
-	// Servicio suggestions; defaultEnvironment preselects Ambiente on create.
+	// Servicio suggestions. On create, defaultService / defaultKind /
+	// defaultEnvironment prefill the fields from wherever the form was opened
+	// (they stay editable) and prefillNote says where they came from.
 	let {
 		editingMonitor = null,
 		services,
+		defaultService = null,
+		defaultKind = null,
 		defaultEnvironment,
+		prefillNote = null,
 		error,
 		submitting,
 		onCancel,
@@ -18,7 +23,10 @@
 	}: {
 		editingMonitor?: Monitor | null;
 		services: string[];
+		defaultService?: string | null;
+		defaultKind?: MonitorKind | null;
 		defaultEnvironment: Environment | null;
+		prefillNote?: string | null;
 		error: string | null;
 		submitting: boolean;
 		onCancel: () => void;
@@ -39,18 +47,42 @@
 
 	const uid = $props.id();
 
-	// The page re-creates this form (keyed on the monitor id) for each
-	// monitor it edits, so the fields only take the props' initial values.
-	const initial = untrack(() => ({ monitor: editingMonitor, environment: defaultEnvironment }));
+	// The page re-creates this form (keyed on the monitor id, or on the
+	// prefill when creating) each time it opens, so the fields only take the
+	// props' initial values.
+	const initial = untrack(() => ({
+		monitor: editingMonitor,
+		service: defaultService,
+		kind: defaultKind,
+		environment: defaultEnvironment
+	}));
 
 	let name = $state(initial.monitor?.name ?? '');
 	let url = $state(initial.monitor?.url ?? '');
 	let description = $state(initial.monitor?.description ?? '');
-	let service = $state(initial.monitor?.service ?? '');
-	let kind = $state<MonitorKind>(initial.monitor?.kind ?? 'api');
+	let service = $state(initial.monitor?.service ?? initial.service ?? '');
+	let kind = $state<MonitorKind>(initial.monitor?.kind ?? initial.kind ?? 'api');
 	let environment = $state<Environment | null>(
 		initial.monitor ? initial.monitor.environment : initial.environment
 	);
+
+	let nameInput = $state<HTMLInputElement>();
+
+	const title = $derived.by(() => {
+		if (editingMonitor) return 'Editar monitor';
+		return initial.service ? `Nuevo monitor en ${initial.service}` : 'Nuevo monitor';
+	});
+
+	const namePlaceholder = $derived(
+		initial.service ? `${initial.service} ${kind === 'front' ? 'web' : 'API'}` : 'API de pagos'
+	);
+	const urlPlaceholder = $derived(kind === 'front' ? 'https://app.ejemplo.com' : 'https://api.ejemplo.com/health');
+
+	// Opened from a service's "+" button, often far down the page: moving
+	// focus to the first empty field also scrolls the form into view.
+	onMount(() => {
+		if (!initial.monitor && initial.service) nameInput?.focus();
+	});
 
 	const urlHelp = $derived(
 		kind === 'front'
@@ -73,16 +105,26 @@
 
 <form class="add-form" onsubmit={handleSubmit}>
 	<div class="form-header">
-		<h2>{editingMonitor ? 'Editar monitor' : 'Nuevo monitor'}</h2>
+		<h2>{title}</h2>
 		<button type="button" class="icon-button" onclick={onCancel} aria-label="Cerrar formulario">
 			<Icon name="close-line" />
 		</button>
 	</div>
+	{#if prefillNote && !editingMonitor}
+		<p class="prefill-note">{prefillNote}</p>
+	{/if}
 
 	<div class="form-grid">
 		<div class="field">
 			<label for="{uid}-name">Nombre</label>
-			<input id="{uid}-name" type="text" placeholder="API de pagos" bind:value={name} required />
+			<input
+				id="{uid}-name"
+				type="text"
+				placeholder={namePlaceholder}
+				bind:value={name}
+				bind:this={nameInput}
+				required
+			/>
 		</div>
 
 		<div class="field">
@@ -90,7 +132,7 @@
 			<input
 				id="{uid}-url"
 				type="text"
-				placeholder="https://api.ejemplo.com/health"
+				placeholder={urlPlaceholder}
 				aria-describedby="{uid}-url-help"
 				bind:value={url}
 				required
@@ -200,6 +242,16 @@
 
 	.form-header h2 {
 		margin: 0;
+	}
+
+	.form-header + .prefill-note {
+		margin-top: -8px;
+	}
+
+	.prefill-note {
+		margin: 0;
+		font-size: 12px;
+		color: var(--m-sub-tx);
 	}
 
 	.icon-button {

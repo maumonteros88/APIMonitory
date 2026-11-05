@@ -253,6 +253,12 @@ pre,
 	--m-warn-bd: #ffe58a;
 	--m-none: #cccfd3;
 	--m-shadow: rgba(0, 0, 0, 0.1);
+	/* Small text on the surface, app or soft backgrounds that must reach
+	   4.5:1 in light mode, where --fg-2 (3.9:1) and --m-bad-tx (4.1:1) fall
+	   short. Used by the filter rail, picker, period and status-strip text. */
+	--m-sub-tx: #5f6a74;
+	--m-bad-ink: #c4321c;
+	--m-warn-ink: #806000;
 }
 
 html[data-theme='dark'] {
@@ -275,6 +281,9 @@ html[data-theme='dark'] {
 	--m-warn-bd: #54461a;
 	--m-none: #3a4148;
 	--m-shadow: rgba(0, 0, 0, 0.5);
+	--m-sub-tx: #a3adb6;
+	--m-bad-ink: #ff8a76;
+	--m-warn-ink: #ffd84d;
 }
 
 body {

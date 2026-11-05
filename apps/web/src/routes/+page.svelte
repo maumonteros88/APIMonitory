@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import {
 		PUBLIC_API_VERSION,
 		PUBLIC_GIT_COMMIT,
@@ -20,21 +21,30 @@
 		subscribeToMonitorEvents,
 		updateMonitor,
 		upsertMonitor,
+		type Environment,
 		type Monitor,
+		type MonitorKind,
 		type NewMonitorInput
 	} from '$lib/api';
 	import { getToken, setToken } from '$lib/auth';
 	import { ago } from '$lib/format';
 	import {
-		ENV_FILTERS,
-		ENV_LABELS,
-		envCounts,
-		filterByEnv,
-		isEnvFilter,
-		serviceNames,
-		type EnvFilter
-	} from '$lib/grouping';
+		emptyStateCopy,
+		filterMonitors,
+		parseServices,
+		pruneServices,
+		revealMonitor,
+		scopeTitle,
+		serviceFilterItems,
+		toggleService,
+		type OutsideItem
+	} from '$lib/filters';
+	import { envCounts, isEnvFilter, serviceNames, type EnvFilter } from '$lib/grouping';
+	import { DEFAULT_PERIOD, applyPeriod, parsePeriod, type Period } from '$lib/period';
+	import { VIEW_OPTIONS, isView, type View } from '$lib/views';
 	import AddMonitorForm from '$lib/components/AddMonitorForm.svelte';
+	import FilterBar from '$lib/components/FilterBar.svelte';
+	import FilterRail from '$lib/components/FilterRail.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import MonitorBoard from '$lib/components/MonitorBoard.svelte';
 	import MonitorList from '$lib/components/MonitorList.svelte';
@@ -59,7 +69,18 @@
 	const THEME_KEY = 'apimonitory_theme';
 	const VIEW_KEY = 'apimonitory_view';
 	const ENV_KEY = 'apimonitory_env';
-	const DAYS_CAPTION = 'Disponibilidad de los últimos 90 días';
+	const SERVICES_KEY = 'apimonitory_services';
+	const DAYS_KEY = 'apimonitory_days';
+	const BOARD_PREFILL_NOTE = 'Servicio, tipo y ambiente vienen de la tarjeta. Solo falta el nombre y la URL.';
+
+	// Viewport, not container, breakpoints. The rail is a page-level layout
+	// choice. The two-column list needs 2 × 600px cards + 16px gap = 1216px
+	// of content: at 1600px that is 1600 − 80 page padding − 264 rail − 32
+	// gap = 1224px. A container query would measure that column directly,
+	// but a query container contains layout and becomes the containing block
+	// of the bars' position: fixed day tooltip, misplacing it.
+	const wideLayout = new MediaQuery('(min-width: 1440px)');
+	const twoColumnList = new MediaQuery('(min-width: 1600px)');
 
 	let authenticated = $state(getToken() !== null);
 	let gateError = $state<string | null>(null);
@@ -96,15 +117,47 @@
 	let formSubmitting = $state(false);
 	let editingMonitor = $state<Monitor | null>(null);
 
-	let theme = $state<'light' | 'dark'>('light');
-	let view = $state<'list' | 'board'>('list');
-	let env = $state<EnvFilter>('all');
+	interface FormPrefill {
+		service: string | null;
+		kind: MonitorKind | null;
+		environment: Environment | null;
+		note: string | null;
+	}
 
-	// Everything below the filter (banners, list, board) only sees the
-	// monitors in the selected environment.
-	const visibleMonitors = $derived(filterByEnv(monitors, env));
+	let formPrefill = $state<FormPrefill>({ service: null, kind: null, environment: null, note: null });
+	// A new prefill (another "+" clicked while the form is open) must
+	// re-create the form, whose fields only read their initial values.
+	const formKey = $derived(
+		editingMonitor
+			? editingMonitor.id
+			: `new|${formPrefill.service ?? ''}|${formPrefill.kind ?? ''}|${formPrefill.environment ?? ''}`
+	);
+
+	let theme = $state<'light' | 'dark'>('light');
+	let view = $state<View>('list');
+	let env = $state<EnvFilter>('all');
+	// Service names, '' for "Sin servicio"; empty means every service.
+	let services = $state<string[]>([]);
+	let days = $state<Period>(DEFAULT_PERIOD);
+
+	// Everything below the filters (banners, every view) only sees the
+	// monitors in the selected environment and services, with their full
+	// 90-day history; each view applies the period on top.
+	const visibleMonitors = $derived(filterMonitors(monitors, env, services));
+	const periodMonitors = $derived(applyPeriod(visibleMonitors, days));
 	const envMonitorCounts = $derived(envCounts(monitors));
+	const serviceItems = $derived(serviceFilterItems(monitors, env, services));
 	const knownServices = $derived(serviceNames(monitors));
+	const emptyCopy = $derived(emptyStateCopy(monitors.length, env, services));
+
+	// Only against a loaded list: before the first load monitors is [] and
+	// pruning would wipe the saved selection on every page load. A service
+	// with no monitor in the current environment still exists and stays.
+	$effect(() => {
+		if (!hasLoadedOnce) return;
+		const pruned = pruneServices(services, monitors);
+		if (pruned !== services) setServices(pruned);
+	});
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let nowTickHandle: ReturnType<typeof setInterval> | undefined;
@@ -136,7 +189,7 @@
 		applyTheme(theme === 'dark' ? 'light' : 'dark');
 	}
 
-	function setView(next: 'list' | 'board') {
+	function setView(next: View) {
 		view = next;
 		try {
 			localStorage.setItem(VIEW_KEY, next);
@@ -152,6 +205,51 @@
 		} catch {
 			// Storage unavailable: the filter still works for this tab.
 		}
+	}
+
+	function setServices(next: string[]) {
+		services = next;
+		try {
+			localStorage.setItem(SERVICES_KEY, JSON.stringify(next));
+		} catch {
+			// Storage unavailable: the filter still works for this tab.
+		}
+	}
+
+	function setDays(next: Period) {
+		days = next;
+		try {
+			localStorage.setItem(DAYS_KEY, String(next));
+		} catch {
+			// Storage unavailable: the period still works for this tab.
+		}
+	}
+
+	function handleToggleService(key: string) {
+		setServices(toggleService(services, key));
+	}
+
+	function clearServices() {
+		setServices([]);
+	}
+
+	function clearFilters() {
+		setEnv('all');
+		setServices([]);
+	}
+
+	// A chip in a regular alert: its monitor is already visible, so the view
+	// narrows to that service alone.
+	function focusService(service: string | null) {
+		setServices([service ?? '']);
+	}
+
+	// A chip in the "fuera de este filtro" strip: its monitor joins the view
+	// instead of replacing what is shown.
+	function revealOutside(item: OutsideItem) {
+		const next = revealMonitor({ env, services }, item);
+		if (next.env !== env) setEnv(next.env);
+		if (next.services !== services) setServices(next.services);
 	}
 
 	async function fullSync() {
@@ -328,12 +426,27 @@
 		formError = null;
 	}
 
+	function openCreateForm(prefill: FormPrefill) {
+		editingMonitor = null;
+		formError = null;
+		formPrefill = prefill;
+		formOpen = true;
+	}
+
 	function toggleCreateForm() {
 		if (formOpen || editingMonitor) {
 			closeForm();
 		} else {
-			formOpen = true;
+			openCreateForm({ service: null, kind: null, environment: env === 'all' ? null : env, note: null });
 		}
+	}
+
+	function handleAddToService(service: string) {
+		openCreateForm({ service, kind: null, environment: env === 'all' ? null : env, note: null });
+	}
+
+	function handleAddFromBoard(service: string, kind: MonitorKind, environment: Environment) {
+		openCreateForm({ service, kind, environment, note: BOARD_PREFILL_NOTE });
 	}
 
 	function handleEdit(monitor: Monitor) {
@@ -403,12 +516,14 @@
 		theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
 		try {
 			const savedView = localStorage.getItem(VIEW_KEY);
-			if (savedView === 'board' || savedView === 'list') view = savedView;
+			if (isView(savedView)) view = savedView;
 			const savedEnv = localStorage.getItem(ENV_KEY);
 			if (isEnvFilter(savedEnv)) env = savedEnv;
+			services = parseServices(localStorage.getItem(SERVICES_KEY));
+			days = parsePeriod(localStorage.getItem(DAYS_KEY));
 		} catch {
-			// Storage unavailable: defaults to the list view and every
-			// environment for this tab.
+			// Storage unavailable: defaults to the list view, every
+			// environment and service, and 90 days for this tab.
 		}
 		const unsubscribe = onUnauthorized(handleUnauthorized);
 		document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -447,25 +562,19 @@
 				<h1>Estado de servicios</h1>
 			</div>
 			<div class="actions">
-				<div class="view-switch">
-					<button
-						type="button"
-						class="view-option"
-						class:active={view === 'list'}
-						onclick={() => setView('list')}
-					>
-						<Icon name="list-check" />
-						Lista
-					</button>
-					<button
-						type="button"
-						class="view-option"
-						class:active={view === 'board'}
-						onclick={() => setView('board')}
-					>
-						<Icon name="layout-masonry-line" />
-						Board
-					</button>
+				<div class="view-switch" role="group" aria-label="Vista">
+					{#each VIEW_OPTIONS as option (option.id)}
+						<button
+							type="button"
+							class="view-option"
+							class:active={view === option.id}
+							aria-pressed={view === option.id}
+							onclick={() => setView(option.id)}
+						>
+							<Icon name={option.icon} />
+							{option.label}
+						</button>
+					{/each}
 				</div>
 				<ThemeToggle {theme} onToggle={toggleTheme} />
 				<button type="button" onclick={handleCheckAll}>
@@ -479,93 +588,121 @@
 			</div>
 		</header>
 
-		<div class="env-filter">
-			<span class="env-filter-label" id="env-filter-label">Ambiente</span>
-			<div class="view-switch" role="group" aria-labelledby="env-filter-label">
-				{#each ENV_FILTERS as option (option)}
-					<button
-						type="button"
-						class="view-option"
-						class:active={env === option}
-						aria-pressed={env === option}
-						onclick={() => setEnv(option)}
-					>
-						{option === 'all' ? 'Todos' : ENV_LABELS[option]}
-						<span class="env-count">{envMonitorCounts[option]}</span>
-					</button>
-				{/each}
+		<div class="layout" class:with-rail={wideLayout.current}>
+			{#if wideLayout.current}
+				<aside class="rail" aria-label="Filtros">
+					<FilterRail
+						{env}
+						envCounts={envMonitorCounts}
+						items={serviceItems}
+						{services}
+						onEnvChange={setEnv}
+						onToggleService={handleToggleService}
+						onClearServices={clearServices}
+					/>
+				</aside>
+			{:else}
+				<FilterBar
+					{env}
+					envCounts={envMonitorCounts}
+					items={serviceItems}
+					{services}
+					onEnvChange={setEnv}
+					onToggleService={handleToggleService}
+					onClearServices={clearServices}
+				/>
+			{/if}
+
+			<div class="content">
+				{#if connectionError}
+					<div class="connection-banner">
+						<Icon name="error-warning-line" />
+						<div class="connection-copy">
+							<span class="connection-text">No se pudo actualizar el estado</span>
+							<span class="connection-sub">{connectionSub}</span>
+						</div>
+					</div>
+				{/if}
+
+				{#if hasLoadedOnce}
+					<StatusBanner
+						monitors={visibleMonitors}
+						all={monitors}
+						{env}
+						{services}
+						{intervalSeconds}
+						onFocusService={focusService}
+						onReveal={revealOutside}
+						onClearFilters={clearFilters}
+					/>
+				{/if}
+
+				{#if formOpen || editingMonitor}
+					{#key formKey}
+						<AddMonitorForm
+							{editingMonitor}
+							services={knownServices}
+							defaultService={formPrefill.service}
+							defaultKind={formPrefill.kind}
+							defaultEnvironment={formPrefill.environment}
+							prefillNote={formPrefill.note}
+							error={formError}
+							submitting={formSubmitting}
+							onCancel={closeForm}
+							onSubmit={handleFormSubmit}
+						/>
+					{/key}
+				{/if}
+
+				{#if !hasLoadedOnce && connectionError}
+					<section class="monitor-list-section">
+						<div class="list-caption">Disponibilidad de los últimos {days} días</div>
+						<div class="monitor-list">
+							<div class="empty-state">
+								<Icon name="pulse-line" size={32} />
+								<p class="empty-title">No se pudo conectar con el servidor</p>
+								<p class="empty-sub">Reintentando automáticamente…</p>
+							</div>
+						</div>
+					</section>
+				{:else if hasLoadedOnce && visibleMonitors.length === 0}
+					<section class="monitor-list-section">
+						<div class="monitor-list">
+							<div class="empty-state">
+								<Icon name="pulse-line" size={32} />
+								<p class="empty-title">{emptyCopy.title}</p>
+								<p class="empty-sub">{emptyCopy.sub}</p>
+								{#if emptyCopy.canClear}
+									<button type="button" class="empty-action" onclick={clearFilters}>Ver todos</button>
+								{/if}
+							</div>
+						</div>
+					</section>
+				{:else if hasLoadedOnce && view === 'board'}
+					<MonitorBoard
+						monitors={periodMonitors}
+						{env}
+						{days}
+						onDaysChange={setDays}
+						onCheck={handleCheck}
+						onAdd={handleAddFromBoard}
+					/>
+				{:else if hasLoadedOnce}
+					<MonitorList
+						monitors={periodMonitors}
+						showEnv={env === 'all'}
+						{days}
+						twoColumns={twoColumnList.current}
+						scopeTitle={wideLayout.current ? scopeTitle(env, services) : null}
+						onDaysChange={setDays}
+						onAddToService={handleAddToService}
+						onCheck={handleCheck}
+						onEdit={handleEdit}
+						onDelete={handleDelete}
+					/>
+				{/if}
 			</div>
 		</div>
-
-		{#if connectionError}
-			<div class="connection-banner">
-				<Icon name="error-warning-line" />
-				<div class="connection-copy">
-					<span class="connection-text">No se pudo actualizar el estado</span>
-					<span class="connection-sub">{connectionSub}</span>
-				</div>
-			</div>
-		{/if}
-
-		{#if hasLoadedOnce}
-			<StatusBanner monitors={visibleMonitors} {env} {intervalSeconds} />
-		{/if}
-
-		{#if formOpen || editingMonitor}
-			{#key editingMonitor?.id ?? 'new'}
-				<AddMonitorForm
-					{editingMonitor}
-					services={knownServices}
-					defaultEnvironment={env === 'all' ? null : env}
-					error={formError}
-					submitting={formSubmitting}
-					onCancel={closeForm}
-					onSubmit={handleFormSubmit}
-				/>
-			{/key}
-		{/if}
-
-		{#if !hasLoadedOnce && connectionError}
-			<section class="monitor-list-section">
-				<div class="list-caption">{DAYS_CAPTION}</div>
-				<div class="monitor-list">
-					<div class="empty-state">
-						<Icon name="pulse-line" size={32} />
-						<p class="empty-title">No se pudo conectar con el servidor</p>
-						<p class="empty-sub">Reintentando automáticamente…</p>
-					</div>
-				</div>
-			</section>
-		{:else if hasLoadedOnce && visibleMonitors.length === 0}
-			<section class="monitor-list-section">
-				<div class="list-caption">{DAYS_CAPTION}</div>
-				<div class="monitor-list">
-					<div class="empty-state">
-						<Icon name="pulse-line" size={32} />
-						{#if monitors.length === 0 || env === 'all'}
-							<p class="empty-title">Todavía no hay monitores</p>
-							<p class="empty-sub">
-								Agrega la URL de un front o el endpoint de health de una API para empezar.
-							</p>
-						{:else}
-							<p class="empty-title">No hay monitores en {ENV_LABELS[env]}</p>
-							<p class="empty-sub">Elige otro ambiente o agrega un monitor en {ENV_LABELS[env]}.</p>
-						{/if}
-					</div>
-				</div>
-			</section>
-		{:else if hasLoadedOnce && view === 'board'}
-			<MonitorBoard monitors={visibleMonitors} {env} daysCaption={DAYS_CAPTION} onCheck={handleCheck} />
-		{:else if hasLoadedOnce}
-			<MonitorList
-				monitors={visibleMonitors}
-				showEnv={env === 'all'}
-				daysCaption={DAYS_CAPTION}
-				onCheck={handleCheck}
-				onEdit={handleEdit}
-				onDelete={handleDelete}
-			/>
-		{/if}
 
 		<footer class="build-info">
 			Front v{PUBLIC_WEB_VERSION} · API v{PUBLIC_API_VERSION} · commit {PUBLIC_GIT_COMMIT}
@@ -575,12 +712,39 @@
 
 <style>
 	.page {
-		max-width: 960px;
+		max-width: 1760px;
 		margin: 0 auto;
 		padding: 48px 24px 80px;
 		display: flex;
 		flex-direction: column;
 		gap: 32px;
+	}
+
+	@media (min-width: 1024px) {
+		.page {
+			padding: 48px 40px 80px;
+		}
+	}
+
+	.layout,
+	.content {
+		display: flex;
+		flex-direction: column;
+		gap: 32px;
+		min-width: 0;
+	}
+
+	.layout.with-rail {
+		display: grid;
+		grid-template-columns: 264px minmax(0, 1fr);
+		align-items: start;
+	}
+
+	.rail {
+		display: flex;
+		flex-direction: column;
+		gap: 28px;
+		min-width: 0;
 	}
 
 	.page-header {
@@ -674,7 +838,7 @@
 		align-items: center;
 		gap: 6px;
 		background: transparent;
-		color: var(--fg-2);
+		color: var(--m-sub-tx);
 	}
 
 	.view-option.active {
@@ -682,27 +846,11 @@
 		color: var(--m-surface);
 	}
 
-	.env-filter {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		flex-wrap: wrap;
-	}
-
-	.env-filter-label {
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--fg-2);
-	}
-
-	.env-filter .view-option {
-		padding: 0 14px;
-	}
-
-	.env-count {
-		font-size: 12px;
-		font-weight: 400;
-		opacity: 0.75;
+	/* Keeps the view switch within a 320px phone without page scroll. */
+	@media (max-width: 400px) {
+		.view-option {
+			padding: 0 8px;
+		}
 	}
 
 	.connection-banner {
@@ -767,6 +915,23 @@
 
 	.empty-sub {
 		margin: 0;
+	}
+
+	.empty-action {
+		margin-top: 8px;
+		height: 40px;
+		padding: 0 16px;
+		border: 1px solid var(--m-ink);
+		border-radius: 4px;
+		background: var(--m-surface);
+		color: var(--m-ink);
+		font-size: 14px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.empty-action:hover {
+		background: var(--m-soft);
 	}
 
 	.build-info {

@@ -6,15 +6,19 @@
 	import Icon from './Icon.svelte';
 	import UptimeBars from './UptimeBars.svelte';
 
+	// stacked: the two-column card layout, with the status and uptime on the
+	// name's line and the bars on their own full-width line below.
 	let {
 		monitor,
 		showEnv,
+		stacked = false,
 		onCheck,
 		onEdit,
 		onDelete
 	}: {
 		monitor: Monitor;
 		showEnv: boolean;
+		stacked?: boolean;
 		onCheck: (id: string) => void;
 		onEdit: (monitor: Monitor) => void;
 		onDelete: (id: string) => void;
@@ -109,7 +113,7 @@
 	}
 </script>
 
-<div class="row">
+<div class="row" class:stacked>
 	<div class="name-cell">
 		<span class="status-dot" style="background: {meta.dotColor}" aria-hidden="true"></span>
 		<button
@@ -142,8 +146,12 @@
 	</div>
 
 	<div class="bars-cell">
-		<UptimeBars history={monitor.history} monitorId={monitor.id} height={24} />
+		<UptimeBars history={monitor.history} monitorId={monitor.id} height={stacked ? 20 : 24} />
 	</div>
+
+	{#if stacked && monitor.status !== 'up'}
+		<span class="status-text status-{monitor.status}">{meta.label}</span>
+	{/if}
 
 	<span class="uptime">{uptimeLabel(monitor.uptimePercent)}</span>
 
@@ -394,6 +402,57 @@
 	.menu .danger:hover,
 	.menu .danger:focus-visible {
 		color: var(--m-bad-tx);
+	}
+
+	.row.stacked {
+		grid-template-columns: minmax(0, 1fr) auto auto 32px;
+		grid-template-areas:
+			'name status uptime menu'
+			'bars bars bars bars';
+		column-gap: 12px;
+		row-gap: 8px;
+		padding: 12px 12px 14px 16px;
+	}
+
+	.stacked .name-cell {
+		grid-area: name;
+	}
+
+	.stacked .name {
+		font-size: 15px;
+	}
+
+	.stacked .bars-cell {
+		grid-area: bars;
+	}
+
+	.stacked .uptime {
+		grid-area: uptime;
+		min-width: 64px;
+		font-weight: 700;
+	}
+
+	.stacked .menu-wrap {
+		grid-area: menu;
+	}
+
+	.status-text {
+		grid-area: status;
+		font-size: 12px;
+		font-weight: 600;
+		white-space: nowrap;
+	}
+
+	.status-down {
+		color: var(--m-bad-ink);
+	}
+
+	.status-degraded {
+		color: var(--m-warn-ink);
+	}
+
+	.status-pending {
+		color: var(--m-sub-tx);
 	}
 
 	/* Narrow screens: the bars drop to their own full-width line. */

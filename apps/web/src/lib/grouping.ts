@@ -107,6 +107,8 @@ export interface AlertItem {
 	label: string;
 	/** " · Dev|QA|Prod" under the 'all' filter, "" otherwise. */
 	env: string;
+	/** The monitor's service, so a chip can focus the view on it. */
+	service: string | null;
 }
 
 export interface Banner {
@@ -119,15 +121,20 @@ function alertItem(m: Monitor, env: EnvFilter): AlertItem {
 	return {
 		id: m.id,
 		label: m.service ? `${m.service} · ${KIND_LABELS[m.kind]}` : m.name,
-		env: env === 'all' && m.environment ? ` · ${ENV_LABELS[m.environment]}` : ''
+		env: env === 'all' && m.environment ? ` · ${ENV_LABELS[m.environment]}` : '',
+		service: m.service
 	};
 }
 
-/** The status banners for the monitors visible under env: one per bad state
- * (down first, then degraded), or a single "all good" / "nothing configured"
- * banner. */
-export function buildBanners(visible: Monitor[], env: EnvFilter): Banner[] {
-	if (visible.length === 0) return [{ level: 'none', text: 'Sin monitores configurados', items: [] }];
+/** The status banners for the monitors visible under the filters: one per
+ * bad state (down first, then degraded), or a single "all good" / "nothing
+ * to show" banner. total is how many monitors exist at all, so an empty view
+ * can tell "nothing configured" from "the filters hide everything". */
+export function buildBanners(visible: Monitor[], env: EnvFilter, total = visible.length): Banner[] {
+	if (visible.length === 0) {
+		const text = total > 0 ? 'Sin monitores en este filtro' : 'Sin monitores configurados';
+		return [{ level: 'none', text, items: [] }];
+	}
 
 	const ordered = orderMonitors(visible);
 	const down = ordered.filter((m) => m.status === 'down');
@@ -155,11 +162,20 @@ export function intervalLabel(seconds: number): string {
 	return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
 }
 
-/** The line under the banners; "" when no monitor is visible. */
-export function summaryLine(count: number, env: EnvFilter, intervalSeconds: number): string {
+/** The line under the banners; "" when no monitor is visible. services is
+ * the service selection ('' = no service, empty = every service). */
+export function summaryLine(count: number, env: EnvFilter, intervalSeconds: number, services: string[] = []): string {
 	if (count === 0) return '';
 	const scope = env === 'all' ? 'todos los ambientes' : ENV_LABELS[env];
-	return `${countLabel(count)} en ${scope} · se verifica cada ${intervalLabel(intervalSeconds)}`;
+	const which =
+		services.length === 0
+			? ''
+			: services.length > 1
+				? ` de ${services.length} servicios`
+				: services[0] === ''
+					? ' sin servicio'
+					: ` de ${services[0]}`;
+	return `${countLabel(count)}${which} en ${scope} · se verifica cada ${intervalLabel(intervalSeconds)}`;
 }
 
 /** One board segment: a monitor, or a placeholder (monitor null) standing
