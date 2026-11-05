@@ -12,10 +12,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const assignServiceCompany = `-- name: AssignServiceCompany :execrows
+update monitors
+set company = $1
+where service = $2
+`
+
+type AssignServiceCompanyParams struct {
+	Company pgtype.Text `db:"company" json:"company"`
+	Service pgtype.Text `db:"service" json:"service"`
+}
+
+func (q *Queries) AssignServiceCompany(ctx context.Context, arg AssignServiceCompanyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, assignServiceCompany, arg.Company, arg.Service)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createMonitor = `-- name: CreateMonitor :one
-insert into monitors (name, description, url, service, kind, environment)
-values ($1, $2, $3, $4, $5, $6)
-returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment
+insert into monitors (name, description, url, service, company, kind, environment)
+values ($1, $2, $3, $4, $5, $6, $7)
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment, company
 `
 
 type CreateMonitorParams struct {
@@ -23,6 +42,7 @@ type CreateMonitorParams struct {
 	Description string      `db:"description" json:"description"`
 	Url         string      `db:"url" json:"url"`
 	Service     pgtype.Text `db:"service" json:"service"`
+	Company     pgtype.Text `db:"company" json:"company"`
 	Kind        string      `db:"kind" json:"kind"`
 	Environment pgtype.Text `db:"environment" json:"environment"`
 }
@@ -33,6 +53,7 @@ func (q *Queries) CreateMonitor(ctx context.Context, arg CreateMonitorParams) (M
 		arg.Description,
 		arg.Url,
 		arg.Service,
+		arg.Company,
 		arg.Kind,
 		arg.Environment,
 	)
@@ -53,6 +74,7 @@ func (q *Queries) CreateMonitor(ctx context.Context, arg CreateMonitorParams) (M
 		&i.Service,
 		&i.Kind,
 		&i.Environment,
+		&i.Company,
 	)
 	return i, err
 }
@@ -71,7 +93,7 @@ func (q *Queries) DeleteMonitor(ctx context.Context, id uuid.UUID) (int64, error
 }
 
 const getMonitor = `-- name: GetMonitor :one
-select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment from monitors
+select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment, company from monitors
 where id = $1
 `
 
@@ -94,12 +116,13 @@ func (q *Queries) GetMonitor(ctx context.Context, id uuid.UUID) (Monitor, error)
 		&i.Service,
 		&i.Kind,
 		&i.Environment,
+		&i.Company,
 	)
 	return i, err
 }
 
 const listMonitors = `-- name: ListMonitors :many
-select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment from monitors
+select id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment, company from monitors
 order by created_at asc
 `
 
@@ -128,6 +151,7 @@ func (q *Queries) ListMonitors(ctx context.Context) ([]Monitor, error) {
 			&i.Service,
 			&i.Kind,
 			&i.Environment,
+			&i.Company,
 		); err != nil {
 			return nil, err
 		}
@@ -184,10 +208,11 @@ update monitors
 set name = $2,
     description = $3,
     service = $4,
-    kind = $5,
-    environment = $6
+    company = $5,
+    kind = $6,
+    environment = $7
 where id = $1
-returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment
+returning id, name, description, url, status, consecutive_failures, last_checked_at, last_http_status, last_latency_ms, last_error_kind, created_at, last_commit, service, kind, environment, company
 `
 
 type UpdateMonitorDetailsParams struct {
@@ -195,6 +220,7 @@ type UpdateMonitorDetailsParams struct {
 	Name        string      `db:"name" json:"name"`
 	Description string      `db:"description" json:"description"`
 	Service     pgtype.Text `db:"service" json:"service"`
+	Company     pgtype.Text `db:"company" json:"company"`
 	Kind        string      `db:"kind" json:"kind"`
 	Environment pgtype.Text `db:"environment" json:"environment"`
 }
@@ -205,6 +231,7 @@ func (q *Queries) UpdateMonitorDetails(ctx context.Context, arg UpdateMonitorDet
 		arg.Name,
 		arg.Description,
 		arg.Service,
+		arg.Company,
 		arg.Kind,
 		arg.Environment,
 	)
@@ -225,6 +252,7 @@ func (q *Queries) UpdateMonitorDetails(ctx context.Context, arg UpdateMonitorDet
 		&i.Service,
 		&i.Kind,
 		&i.Environment,
+		&i.Company,
 	)
 	return i, err
 }

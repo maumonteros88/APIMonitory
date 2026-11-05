@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"apimonitory/internal/monitor"
 	"apimonitory/internal/store/db"
@@ -112,7 +113,7 @@ func TestStore_UpdateMonitorDetails(t *testing.T) {
 	}
 	defer s.DeleteMonitor(ctx, created.ID)
 
-	updated, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc", MonitorLabels{Service: "Pagos", Kind: "front", Environment: "prod"})
+	updated, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc", MonitorLabels{Service: "Pagos", Company: "Empresa A", Kind: "front", Environment: "prod"})
 	if err != nil {
 		t.Fatalf("UpdateMonitorDetails: %v", err)
 	}
@@ -123,17 +124,18 @@ func TestStore_UpdateMonitorDetails(t *testing.T) {
 		t.Errorf("url changed to %q, want it untouched (%q)", updated.Url, created.Url)
 	}
 	if updated.Service.String != "Pagos" || !updated.Service.Valid || updated.Kind != "front" ||
-		updated.Environment.String != "prod" || !updated.Environment.Valid {
-		t.Errorf("labels = %+v/%q/%+v, want Pagos/front/prod", updated.Service, updated.Kind, updated.Environment)
+		updated.Environment.String != "prod" || !updated.Environment.Valid ||
+		updated.Company.String != "Empresa A" || !updated.Company.Valid {
+		t.Errorf("labels = %+v/%+v/%q/%+v, want Pagos/Empresa A/front/prod", updated.Service, updated.Company, updated.Kind, updated.Environment)
 	}
 
-	// Empty service and environment are stored as NULL, not as "".
+	// Empty service, company and environment are stored as NULL, not as "".
 	cleared, err := s.UpdateMonitorDetails(ctx, created.ID, "renamed", "new desc", MonitorLabels{Kind: "api"})
 	if err != nil {
 		t.Fatalf("UpdateMonitorDetails (clear labels): %v", err)
 	}
-	if cleared.Service.Valid || cleared.Environment.Valid || cleared.Kind != "api" {
-		t.Errorf("labels = %+v/%q/%+v, want NULL/api/NULL", cleared.Service, cleared.Kind, cleared.Environment)
+	if cleared.Service.Valid || cleared.Company.Valid || cleared.Environment.Valid || cleared.Kind != "api" {
+		t.Errorf("labels = %+v/%+v/%q/%+v, want NULL/NULL/api/NULL", cleared.Service, cleared.Company, cleared.Kind, cleared.Environment)
 	}
 
 	if _, err := s.UpdateMonitorDetails(ctx, uuid.New(), "x", "y", MonitorLabels{Kind: "api"}); !errors.Is(err, ErrNotFound) {
@@ -154,7 +156,7 @@ func TestStore_CreateMonitor_Labels(t *testing.T) {
 	}
 	defer s.Close()
 
-	created, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", MonitorLabels{Service: "Backoffice", Kind: "front", Environment: "qa"})
+	created, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", MonitorLabels{Service: "Backoffice", Company: "Empresa B", Kind: "front", Environment: "qa"})
 	if err != nil {
 		t.Fatalf("CreateMonitor: %v", err)
 	}
@@ -164,8 +166,9 @@ func TestStore_CreateMonitor_Labels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMonitor: %v", err)
 	}
-	if got.Service.String != "Backoffice" || got.Kind != "front" || got.Environment.String != "qa" {
-		t.Errorf("labels = %+v/%q/%+v, want Backoffice/front/qa", got.Service, got.Kind, got.Environment)
+	if got.Service.String != "Backoffice" || got.Kind != "front" || got.Environment.String != "qa" ||
+		got.Company.String != "Empresa B" || !got.Company.Valid {
+		t.Errorf("labels = %+v/%+v/%q/%+v, want Backoffice/Empresa B/front/qa", got.Service, got.Company, got.Kind, got.Environment)
 	}
 
 	prepro, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", MonitorLabels{Kind: "api", Environment: "prepro"})
@@ -176,6 +179,9 @@ func TestStore_CreateMonitor_Labels(t *testing.T) {
 	if prepro.Environment.String != "prepro" {
 		t.Errorf("environment = %+v, want prepro", prepro.Environment)
 	}
+	if prepro.Company.Valid {
+		t.Errorf("company = %+v, want NULL when none is given", prepro.Company)
+	}
 
 	// The CHECK constraints are the last line of defense behind the HTTP
 	// validation.
@@ -184,6 +190,91 @@ func TestStore_CreateMonitor_Labels(t *testing.T) {
 			s.DeleteMonitor(ctx, m.ID)
 			t.Errorf("CreateMonitor(%+v) succeeded, want a check constraint violation", labels)
 		}
+	}
+}
+
+func TestStore_AssignServiceCompany(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	// Unique service names so the test never touches rows it did not create.
+	target := "Pagos " + uuid.NewString()
+	other := "Backoffice " + uuid.NewString()
+
+	create := func(service, company string) db.Monitor {
+		t.Helper()
+		m, err := s.CreateMonitor(ctx, "test monitor", "", "https://example.com", MonitorLabels{Service: service, Company: company, Kind: "api"})
+		if err != nil {
+			t.Fatalf("CreateMonitor: %v", err)
+		}
+		t.Cleanup(func() { s.DeleteMonitor(ctx, m.ID) })
+		return m
+	}
+	a := create(target, "Empresa A")
+	b := create(target, "")
+	untouched := create(other, "Empresa A")
+	noService := create("", "Empresa A")
+
+	company := func(id uuid.UUID) pgtype.Text {
+		t.Helper()
+		m, err := s.GetMonitor(ctx, id)
+		if err != nil {
+			t.Fatalf("GetMonitor: %v", err)
+		}
+		return m.Company
+	}
+
+	n, err := s.AssignServiceCompany(ctx, target, "Empresa B")
+	if err != nil {
+		t.Fatalf("AssignServiceCompany: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("updated = %d, want 2", n)
+	}
+	for _, id := range []uuid.UUID{a.ID, b.ID} {
+		if c := company(id); !c.Valid || c.String != "Empresa B" {
+			t.Errorf("company of %s = %+v, want Empresa B", id, c)
+		}
+	}
+	for _, id := range []uuid.UUID{untouched.ID, noService.ID} {
+		if c := company(id); !c.Valid || c.String != "Empresa A" {
+			t.Errorf("company of %s = %+v, want Empresa A (untouched)", id, c)
+		}
+	}
+
+	// An empty company clears the label to NULL, not "".
+	n, err = s.AssignServiceCompany(ctx, target, "")
+	if err != nil {
+		t.Fatalf("AssignServiceCompany (clear): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("updated (clear) = %d, want 2", n)
+	}
+	for _, id := range []uuid.UUID{a.ID, b.ID} {
+		if c := company(id); c.Valid {
+			t.Errorf("company of %s = %+v, want NULL", id, c)
+		}
+	}
+	if c := company(untouched.ID); !c.Valid || c.String != "Empresa A" {
+		t.Errorf("company of other service = %+v, want Empresa A (untouched)", c)
+	}
+
+	// Unknown service: nothing to update.
+	n, err = s.AssignServiceCompany(ctx, "No existe "+uuid.NewString(), "Empresa B")
+	if err != nil {
+		t.Fatalf("AssignServiceCompany (unknown): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("updated (unknown) = %d, want 0", n)
 	}
 }
 

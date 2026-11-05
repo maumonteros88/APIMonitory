@@ -31,6 +31,7 @@ type Store interface {
 	ListMonitors(ctx context.Context) ([]db.Monitor, error)
 	GetMonitor(ctx context.Context, id uuid.UUID) (db.Monitor, error)
 	UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, description string, labels store.MonitorLabels) (db.Monitor, error)
+	AssignServiceCompany(ctx context.Context, service, company string) (int64, error)
 	DeleteMonitor(ctx context.Context, id uuid.UUID) error
 	ListDailyStatsSince(ctx context.Context, id uuid.UUID, since time.Time) ([]db.DailyStat, error)
 	ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]db.DailyStat, error)
@@ -118,6 +119,7 @@ func (a *api) routes() *http.ServeMux {
 	mux.Handle("POST /api/monitors/check", a.requireToken(a.handleCheckAllMonitors))
 	mux.Handle("PATCH /api/monitors/{id}", a.requireToken(a.handleUpdateMonitor))
 	mux.Handle("DELETE /api/monitors/{id}", a.requireToken(a.handleDeleteMonitor))
+	mux.Handle("PATCH /api/services/company", a.requireToken(a.handleAssignServiceCompany))
 	mux.Handle("POST /api/monitors/{id}/check", a.requireToken(a.handleCheckMonitor))
 	mux.Handle("GET /api/monitors/{id}/incidents", a.requireToken(a.handleIncidents))
 	// Catches any /api/* request that didn't match a route above, so it
@@ -163,6 +165,7 @@ type monitorResponse struct {
 	Description   string       `json:"description"`
 	URL           string       `json:"url"`
 	Service       *string      `json:"service"`
+	Company       *string      `json:"company"`
 	Kind          string       `json:"kind"`
 	Environment   *string      `json:"environment"`
 	Status        string       `json:"status"`
@@ -253,13 +256,17 @@ type createMonitorRequest struct {
 	URL         string  `json:"url"`
 	Description string  `json:"description"`
 	Service     *string `json:"service"`
+	Company     *string `json:"company"`
 	Kind        *string `json:"kind"`
 	Environment *string `json:"environment"`
 }
 
-// maxServiceLength caps a monitor's service name, in characters (not bytes,
-// so accented names get the same room as plain ones).
+// maxServiceLength caps a monitor's service name and company, in characters
+// (not bytes, so accented names get the same room as plain ones).
 const maxServiceLength = 80
+
+// errCompanyTooLong is the 400 message for a company over maxServiceLength.
+const errCompanyTooLong = "La empresa no puede superar los 80 caracteres"
 
 // validateLabels checks already-normalized labels (service trimmed, absent
 // or null values turned into "") and returns the Spanish message to send
@@ -267,6 +274,9 @@ const maxServiceLength = 80
 func validateLabels(l store.MonitorLabels) string {
 	if utf8.RuneCountInString(l.Service) > maxServiceLength {
 		return "El servicio no puede superar los 80 caracteres"
+	}
+	if utf8.RuneCountInString(l.Company) > maxServiceLength {
+		return errCompanyTooLong
 	}
 	if l.Kind != "front" && l.Kind != "api" {
 		return "El tipo debe ser front o api"
@@ -283,6 +293,7 @@ func validateLabels(l store.MonitorLabels) string {
 func labelsOf(m db.Monitor) store.MonitorLabels {
 	return store.MonitorLabels{
 		Service:     m.Service.String,
+		Company:     m.Company.String,
 		Kind:        m.Kind,
 		Environment: m.Environment.String,
 	}
@@ -310,6 +321,9 @@ func (a *api) handleCreateMonitor(w http.ResponseWriter, r *http.Request) {
 	labels := store.MonitorLabels{Kind: "api"}
 	if req.Service != nil {
 		labels.Service = strings.TrimSpace(*req.Service)
+	}
+	if req.Company != nil {
+		labels.Company = strings.TrimSpace(*req.Company)
 	}
 	if req.Kind != nil {
 		labels.Kind = *req.Kind
@@ -352,6 +366,7 @@ type updateMonitorRequest struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Service     optionalString `json:"service"`
+	Company     optionalString `json:"company"`
 	Kind        optionalString `json:"kind"`
 	Environment optionalString `json:"environment"`
 }
@@ -383,7 +398,7 @@ func (o optionalString) apply(current string) string {
 }
 
 // handleUpdateMonitor renames a monitor, changes its description and sets
-// any of its labels (service, kind, environment) present in the body; a
+// any of its labels (service, company, kind, environment) present in the body; a
 // label absent from the body keeps its stored value. Its URL is deliberately
 // not editable here (see Store.UpdateMonitorDetails).
 func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
@@ -415,6 +430,7 @@ func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 	labels := labelsOf(current)
 	labels.Service = strings.TrimSpace(req.Service.apply(labels.Service))
+	labels.Company = strings.TrimSpace(req.Company.apply(labels.Company))
 	labels.Kind = req.Kind.apply(labels.Kind)
 	labels.Environment = req.Environment.apply(labels.Environment)
 	if msg := validateLabels(labels); msg != "" {
@@ -438,6 +454,57 @@ func (a *api) handleUpdateMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, mr)
+}
+
+type assignServiceCompanyRequest struct {
+	Service string  `json:"service"`
+	Company *string `json:"company"`
+}
+
+type assignServiceCompanyResponse struct {
+	Service string  `json:"service"`
+	Company *string `json:"company"`
+	Updated int64   `json:"updated"`
+}
+
+// handleAssignServiceCompany sets (or, with an empty or null company,
+// clears) the company label on every monitor of one service.
+func (a *api) handleAssignServiceCompany(w http.ResponseWriter, r *http.Request) {
+	var req assignServiceCompanyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "El cuerpo de la solicitud no es JSON válido")
+		return
+	}
+
+	service := strings.TrimSpace(req.Service)
+	if service == "" {
+		writeError(w, http.StatusBadRequest, "Ingresa el servicio")
+		return
+	}
+	company := ""
+	if req.Company != nil {
+		company = strings.TrimSpace(*req.Company)
+	}
+	if utf8.RuneCountInString(company) > maxServiceLength {
+		writeError(w, http.StatusBadRequest, errCompanyTooLong)
+		return
+	}
+
+	updated, err := a.store.AssignServiceCompany(r.Context(), service, company)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if updated == 0 {
+		writeError(w, http.StatusNotFound, "No hay monitores en ese servicio")
+		return
+	}
+
+	resp := assignServiceCompanyResponse{Service: service, Updated: updated}
+	if company != "" {
+		resp.Company = &company
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *api) handleDeleteMonitor(w http.ResponseWriter, r *http.Request) {
@@ -535,6 +602,9 @@ func buildMonitorResponseFromStats(m db.Monitor, days int, today time.Time, stat
 	}
 	if m.Service.Valid {
 		resp.Service = &m.Service.String
+	}
+	if m.Company.Valid {
+		resp.Company = &m.Company.String
 	}
 	if m.Environment.Valid {
 		resp.Environment = &m.Environment.String

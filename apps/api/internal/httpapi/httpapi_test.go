@@ -60,9 +60,10 @@ func (f *fakeStore) CreateMonitor(_ context.Context, name, description, url stri
 }
 
 // setLabels mirrors how the real store persists labels: "" is stored as
-// NULL for service and environment.
+// NULL for service, company and environment.
 func setLabels(m *db.Monitor, labels store.MonitorLabels) {
 	m.Service = pgtype.Text{String: labels.Service, Valid: labels.Service != ""}
+	m.Company = pgtype.Text{String: labels.Company, Valid: labels.Company != ""}
 	m.Kind = labels.Kind
 	m.Environment = pgtype.Text{String: labels.Environment, Valid: labels.Environment != ""}
 }
@@ -97,6 +98,18 @@ func (f *fakeStore) UpdateMonitorDetails(_ context.Context, id uuid.UUID, name, 
 	setLabels(&m, labels)
 	f.monitors[id] = m
 	return m, nil
+}
+
+func (f *fakeStore) AssignServiceCompany(_ context.Context, service, company string) (int64, error) {
+	var n int64
+	for id, m := range f.monitors {
+		if m.Service.Valid && m.Service.String == service {
+			m.Company = pgtype.Text{String: company, Valid: company != ""}
+			f.monitors[id] = m
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (f *fakeStore) DeleteMonitor(_ context.Context, id uuid.UUID) error {
@@ -269,6 +282,212 @@ func labelsJSON(t *testing.T, data []byte) [3]string {
 		out[i] = string(v)
 	}
 	return out
+}
+
+// companyJSON returns the raw JSON value of a monitor payload's company
+// key, so tests can tell null apart from "" or from a missing key.
+func companyJSON(t *testing.T, data []byte) string {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode monitor payload: %v", err)
+	}
+	v, ok := raw["company"]
+	if !ok {
+		t.Fatalf("monitor payload has no \"company\" key: %s", data)
+	}
+	return string(v)
+}
+
+const errCompany = "La empresa no puede superar los 80 caracteres"
+
+func TestCreateMonitor_Company(t *testing.T) {
+	accented80 := strings.Repeat("ñ", 80) // 160 bytes: the limit counts characters
+
+	tests := []struct {
+		name        string
+		fields      string // fields appended to an otherwise valid body
+		wantStatus  int
+		wantCompany string // raw JSON
+		wantError   string
+	}{
+		{"no company", ``, http.StatusCreated, `null`, ""},
+		{"company", `,"company":"Empresa A"`, http.StatusCreated, `"Empresa A"`, ""},
+		{"company is trimmed", `,"company":"  Empresa A  "`, http.StatusCreated, `"Empresa A"`, ""},
+		{"empty company is null", `,"company":""`, http.StatusCreated, `null`, ""},
+		{"blank company is null", `,"company":"   "`, http.StatusCreated, `null`, ""},
+		{"null company is null", `,"company":null`, http.StatusCreated, `null`, ""},
+		{"company at the limit", `,"company":"` + accented80 + `"`, http.StatusCreated, `"` + accented80 + `"`, ""},
+		{"company over the limit", `,"company":"` + strings.Repeat("ñ", 81) + `"`, http.StatusBadRequest, "", errCompany},
+		{"non-string company", `,"company":5`, http.StatusBadRequest, "", "El cuerpo de la solicitud no es JSON válido"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeStore()
+			mux := newTestMux(s)
+
+			body := `{"name":"Pagos API","url":"https://example.com/health"` + tc.fields + `}`
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/monitors", strings.NewReader(body)))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantError != "" {
+				if msg := decodeError(t, rec); msg != tc.wantError {
+					t.Errorf("error = %q, want %q", msg, tc.wantError)
+				}
+				if len(s.monitors) != 0 {
+					t.Errorf("store has %d monitors after a rejected create, want 0", len(s.monitors))
+				}
+				return
+			}
+			if got := companyJSON(t, rec.Body.Bytes()); got != tc.wantCompany {
+				t.Errorf("company = %s, want %s", got, tc.wantCompany)
+			}
+		})
+	}
+}
+
+// TestUpdateMonitor_Company covers PATCH's presence semantics for company:
+// absent keeps it, a value replaces it (trimmed), null or "" clears it.
+func TestUpdateMonitor_Company(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantStatus  int
+		wantCompany string // raw JSON, both in the response and in the store
+		wantError   string
+	}{
+		{"absent company is unchanged", `{"name":"Pagos Web"}`, http.StatusOK, `"Empresa A"`, ""},
+		{"set company", `{"name":"Pagos Web","company":"Empresa B"}`, http.StatusOK, `"Empresa B"`, ""},
+		{"company is trimmed", `{"name":"Pagos Web","company":"  Empresa B "}`, http.StatusOK, `"Empresa B"`, ""},
+		{"null company clears it", `{"name":"Pagos Web","company":null}`, http.StatusOK, `null`, ""},
+		{"empty company clears it", `{"name":"Pagos Web","company":""}`, http.StatusOK, `null`, ""},
+		{"company over the limit", `{"name":"Pagos Web","company":"` + strings.Repeat("a", 81) + `"}`, http.StatusBadRequest, `"Empresa A"`, errCompany},
+		{"non-string company", `{"name":"Pagos Web","company":5}`, http.StatusBadRequest, `"Empresa A"`, "El cuerpo de la solicitud no es JSON válido"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeStore()
+			created, _ := s.CreateMonitor(context.Background(), "Pagos Web", "", "https://example.com",
+				store.MonitorLabels{Service: "Pagos", Company: "Empresa A", Kind: "front", Environment: "prod"})
+			mux := newTestMux(s)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, authedRequest(http.MethodPatch, "/api/monitors/"+created.ID.String(), strings.NewReader(tc.body)))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantError != "" {
+				if msg := decodeError(t, rec); msg != tc.wantError {
+					t.Errorf("error = %q, want %q", msg, tc.wantError)
+				}
+			} else if got := companyJSON(t, rec.Body.Bytes()); got != tc.wantCompany {
+				t.Errorf("response company = %s, want %s", got, tc.wantCompany)
+			}
+
+			persisted, err := json.Marshal(buildMonitorResponseFromStats(s.monitors[created.ID], 1, time.Now(), nil, false))
+			if err != nil {
+				t.Fatalf("marshal stored monitor: %v", err)
+			}
+			if got := companyJSON(t, persisted); got != tc.wantCompany {
+				t.Errorf("stored company = %s, want %s", got, tc.wantCompany)
+			}
+		})
+	}
+}
+
+func TestAssignServiceCompany(t *testing.T) {
+	accented80 := strings.Repeat("ñ", 80)
+
+	tests := []struct {
+		name        string
+		body        string
+		wantStatus  int
+		wantResp    string // exact JSON of a 200 response
+		wantCompany string // raw JSON of the "Pagos" monitors' company afterwards
+		wantError   string
+	}{
+		{"sets the company", `{"service":"Pagos","company":"Empresa B"}`, http.StatusOK,
+			`{"service":"Pagos","company":"Empresa B","updated":2}`, `"Empresa B"`, ""},
+		{"service and company are trimmed", `{"service":"  Pagos ","company":"  Empresa B "}`, http.StatusOK,
+			`{"service":"Pagos","company":"Empresa B","updated":2}`, `"Empresa B"`, ""},
+		{"company at the limit", `{"service":"Pagos","company":"` + accented80 + `"}`, http.StatusOK,
+			`{"service":"Pagos","company":"` + accented80 + `","updated":2}`, `"` + accented80 + `"`, ""},
+		{"null company clears it", `{"service":"Pagos","company":null}`, http.StatusOK,
+			`{"service":"Pagos","company":null,"updated":2}`, `null`, ""},
+		{"empty company clears it", `{"service":"Pagos","company":""}`, http.StatusOK,
+			`{"service":"Pagos","company":null,"updated":2}`, `null`, ""},
+		{"absent company clears it", `{"service":"Pagos"}`, http.StatusOK,
+			`{"service":"Pagos","company":null,"updated":2}`, `null`, ""},
+		{"unknown service", `{"service":"Ejemplo","company":"Empresa B"}`, http.StatusNotFound,
+			``, `"Empresa A"`, "No hay monitores en ese servicio"},
+		{"empty service", `{"service":"","company":"Empresa B"}`, http.StatusBadRequest,
+			``, `"Empresa A"`, "Ingresa el servicio"},
+		{"blank service", `{"service":"   ","company":"Empresa B"}`, http.StatusBadRequest,
+			``, `"Empresa A"`, "Ingresa el servicio"},
+		{"absent service", `{"company":"Empresa B"}`, http.StatusBadRequest,
+			``, `"Empresa A"`, "Ingresa el servicio"},
+		{"company over the limit", `{"service":"Pagos","company":"` + strings.Repeat("ñ", 81) + `"}`, http.StatusBadRequest,
+			``, `"Empresa A"`, errCompany},
+		{"invalid JSON", `{"service":`, http.StatusBadRequest,
+			``, `"Empresa A"`, "El cuerpo de la solicitud no es JSON válido"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFakeStore()
+			labels := store.MonitorLabels{Service: "Pagos", Company: "Empresa A", Kind: "api"}
+			a, _ := s.CreateMonitor(context.Background(), "Pagos API", "", "https://example.com", labels)
+			b, _ := s.CreateMonitor(context.Background(), "Pagos Web", "", "https://example.com", labels)
+			other, _ := s.CreateMonitor(context.Background(), "Backoffice API", "", "https://example.com",
+				store.MonitorLabels{Service: "Backoffice", Company: "Empresa A", Kind: "api"})
+			mux := newTestMux(s)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, authedRequest(http.MethodPatch, "/api/services/company", strings.NewReader(tc.body)))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantError != "" {
+				if msg := decodeError(t, rec); msg != tc.wantError {
+					t.Errorf("error = %q, want %q", msg, tc.wantError)
+				}
+			} else if got := strings.TrimSpace(rec.Body.String()); got != tc.wantResp {
+				t.Errorf("body = %s, want %s", got, tc.wantResp)
+			}
+
+			company := func(id uuid.UUID) string {
+				persisted, err := json.Marshal(buildMonitorResponseFromStats(s.monitors[id], 1, time.Now(), nil, false))
+				if err != nil {
+					t.Fatalf("marshal stored monitor: %v", err)
+				}
+				return companyJSON(t, persisted)
+			}
+			for _, id := range []uuid.UUID{a.ID, b.ID} {
+				if got := company(id); got != tc.wantCompany {
+					t.Errorf("stored company = %s, want %s", got, tc.wantCompany)
+				}
+			}
+			if got := company(other.ID); got != `"Empresa A"` {
+				t.Errorf("another service's company = %s, want it untouched", got)
+			}
+		})
+	}
+}
+
+func TestAssignServiceCompany_RequiresToken(t *testing.T) {
+	mux := newTestMux(newFakeStore())
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/services/company", strings.NewReader(`{"service":"Pagos","company":"Empresa B"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
 }
 
 func TestCreateMonitor_Labels(t *testing.T) {

@@ -75,6 +75,7 @@ func (s *Store) Close() {
 // changes how the monitor is probed.
 type MonitorLabels struct {
 	Service     string // "" means no service (stored as NULL)
+	Company     string // "" for none (stored as NULL)
 	Kind        string // "front" or "api"
 	Environment string // "dev", "qa", "prepro", "prod", or "" for none (stored as NULL)
 }
@@ -86,6 +87,7 @@ func (s *Store) CreateMonitor(ctx context.Context, name, description, url string
 		Description: description,
 		Url:         url,
 		Service:     optionalText(labels.Service),
+		Company:     optionalText(labels.Company),
 		Kind:        labels.Kind,
 		Environment: optionalText(labels.Environment),
 	})
@@ -115,6 +117,7 @@ func (s *Store) UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, de
 		Name:        name,
 		Description: description,
 		Service:     optionalText(labels.Service),
+		Company:     optionalText(labels.Company),
 		Kind:        labels.Kind,
 		Environment: optionalText(labels.Environment),
 	})
@@ -122,6 +125,16 @@ func (s *Store) UpdateMonitorDetails(ctx context.Context, id uuid.UUID, name, de
 		return db.Monitor{}, ErrNotFound
 	}
 	return m, err
+}
+
+// AssignServiceCompany sets the company label on every monitor whose service
+// is exactly service, and returns how many were updated. An empty company
+// clears it (stored as NULL).
+func (s *Store) AssignServiceCompany(ctx context.Context, service, company string) (int64, error) {
+	return s.queries.AssignServiceCompany(ctx, db.AssignServiceCompanyParams{
+		Company: optionalText(company),
+		Service: optionalText(service),
+	})
 }
 
 // DeleteMonitor removes a monitor, cascading its checks and daily_stats.

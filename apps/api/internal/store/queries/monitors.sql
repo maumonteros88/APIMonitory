@@ -1,6 +1,6 @@
 -- name: CreateMonitor :one
-insert into monitors (name, description, url, service, kind, environment)
-values ($1, $2, $3, $4, $5, $6)
+insert into monitors (name, description, url, service, company, kind, environment)
+values ($1, $2, $3, $4, $5, $6, $7)
 returning *;
 
 -- name: ListMonitors :many
@@ -20,10 +20,16 @@ update monitors
 set name = $2,
     description = $3,
     service = $4,
-    kind = $5,
-    environment = $6
+    company = $5,
+    kind = $6,
+    environment = $7
 where id = $1
 returning *;
+
+-- name: AssignServiceCompany :execrows
+update monitors
+set company = sqlc.narg('company')
+where service = sqlc.arg('service');
 
 -- name: UpdateMonitorAfterCheck :execrows
 update monitors

@@ -46,4 +46,5 @@ type Monitor struct {
 	Service             pgtype.Text        `db:"service" json:"service"`
 	Kind                string             `db:"kind" json:"kind"`
 	Environment         pgtype.Text        `db:"environment" json:"environment"`
+	Company             pgtype.Text        `db:"company" json:"company"`
 }
