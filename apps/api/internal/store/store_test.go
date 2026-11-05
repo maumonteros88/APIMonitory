@@ -443,3 +443,116 @@ func TestStore_ListScheduledChecksBetween_FiltersAndOrders(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_ListCheckBuckets(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping store integration test")
+	}
+
+	ctx := context.Background()
+	s, err := Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+
+	mk := func(name string) uuid.UUID {
+		m, err := s.CreateMonitor(ctx, name, "created by store_test", "https://example.com/health", MonitorLabels{Kind: "api"})
+		if err != nil {
+			t.Fatalf("CreateMonitor: %v", err)
+		}
+		t.Cleanup(func() { s.DeleteMonitor(ctx, m.ID) })
+		return m.ID
+	}
+	pagos, cobros, other := mk("Pagos API"), mk("Cobros API"), mk("Reportes API")
+
+	// 15-minute buckets from an epoch-aligned instant.
+	base := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	const bucketSeconds = 900
+	add := func(id uuid.UUID, at time.Time, scheduled, success bool, latencyMs int, status monitor.Status) {
+		t.Helper()
+		res := monitor.ProbeResult{Success: success, LatencyMs: latencyMs}
+		if !success {
+			res.ErrorKind = "timeout"
+		}
+		err := s.RegisterAttempt(ctx, Attempt{
+			MonitorID: id, Result: res, NewStatus: status, Scheduled: scheduled,
+			CheckInterval: time.Minute, Now: at,
+		})
+		if err != nil {
+			t.Fatalf("RegisterAttempt: %v", err)
+		}
+	}
+
+	// Bucket 0: two ups plus one just before the boundary (sub-second, to
+	// catch float rounding), and a manual failure that must not count.
+	add(pagos, base.Add(1*time.Minute), true, true, 100, monitor.StatusUp)
+	add(pagos, base.Add(2*time.Minute), true, true, 300, monitor.StatusUp)
+	add(pagos, base.Add(3*time.Minute), false, false, 9000, monitor.StatusDown)
+	add(pagos, base.Add(15*time.Minute-time.Millisecond), true, true, 50, monitor.StatusUp)
+	// Bucket 1: starts with a check exactly on the boundary (belongs here, not
+	// to bucket 0); a failure then a success, so worst is down but latency
+	// only reflects the success.
+	add(pagos, base.Add(15*time.Minute), true, false, 5000, monitor.StatusDown)
+	add(pagos, base.Add(17*time.Minute), true, true, 200, monitor.StatusUp)
+	// One microsecond before the next boundary still belongs to bucket 1.
+	add(pagos, base.Add(30*time.Minute-time.Microsecond), true, true, 10, monitor.StatusUp)
+	// Bucket 2: a degraded success.
+	add(pagos, base.Add(30*time.Minute), true, true, 2500, monitor.StatusDegraded)
+	// Bucket 3: a success exactly on the boundary, and a failed check.
+	// Bucket 4 (base+1h) is the exclusive upper bound of the window below,
+	// and base-1s the lower: both outside.
+	add(pagos, base.Add(45*time.Minute), true, true, 30, monitor.StatusUp)
+	add(pagos, base.Add(50*time.Minute), true, false, 5000, monitor.StatusDown)
+	add(pagos, base.Add(time.Hour), true, true, 70, monitor.StatusUp)
+	add(pagos, base.Add(-time.Second), true, true, 70, monitor.StatusUp)
+	// Another monitor in the same bucket 0, and one that isn't requested.
+	add(cobros, base.Add(5*time.Minute), true, true, 40, monitor.StatusUp)
+	add(other, base.Add(5*time.Minute), true, true, 999, monitor.StatusUp)
+
+	rows, err := s.ListCheckBuckets(ctx, []uuid.UUID{pagos, cobros}, base, base.Add(time.Hour), bucketSeconds)
+	if err != nil {
+		t.Fatalf("ListCheckBuckets: %v", err)
+	}
+
+	type key struct {
+		id uuid.UUID
+		at time.Time
+	}
+	got := map[key]db.ListCheckBucketsRow{}
+	for _, r := range rows {
+		got[key{r.MonitorID, r.Bucket.Time.UTC()}] = r
+	}
+	if len(rows) != 5 {
+		t.Fatalf("got %d bucket rows, want 5 (4 for pagos, 1 for cobros): %+v", len(rows), rows)
+	}
+
+	// worst: down 3, degraded 2, up 1.
+	want := []struct {
+		id               uuid.UUID
+		bucket           int
+		checks, okChecks int32
+		sumMs            int64
+		maxMs, worst     int32
+	}{
+		{pagos, 0, 3, 3, 450, 300, 1},
+		{pagos, 1, 3, 2, 210, 200, 3},
+		{pagos, 2, 1, 1, 2500, 2500, 2},
+		{pagos, 3, 2, 1, 30, 30, 3},
+		{cobros, 0, 1, 1, 40, 40, 1},
+	}
+	for _, w := range want {
+		at := base.Add(time.Duration(w.bucket*bucketSeconds) * time.Second)
+		r, ok := got[key{w.id, at}]
+		if !ok {
+			t.Errorf("missing row for monitor %s bucket %d (%s)", w.id, w.bucket, at)
+			continue
+		}
+		if r.Checks != w.checks || r.OkChecks != w.okChecks || r.OkLatencySumMs != w.sumMs || r.OkLatencyMaxMs != w.maxMs || r.Worst != w.worst {
+			t.Errorf("monitor %s bucket %d = checks %d ok %d sum %d max %d worst %d, want %d/%d/%d/%d/%d",
+				w.id, w.bucket, r.Checks, r.OkChecks, r.OkLatencySumMs, r.OkLatencyMaxMs, r.Worst,
+				w.checks, w.okChecks, w.sumMs, w.maxMs, w.worst)
+		}
+	}
+}

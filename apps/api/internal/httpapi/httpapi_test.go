@@ -26,6 +26,15 @@ type fakeStore struct {
 	allDailyStats []db.DailyStat
 	dailyStats    map[uuid.UUID][]db.DailyStat // per-monitor override for ListDailyStatsSince
 	checks        map[uuid.UUID][]fakeCheck    // per-monitor fixture for ListScheduledChecksBetween
+	bucketRows    []db.ListCheckBucketsRow     // fixture for ListCheckBuckets, filtered by ids and window
+	bucketCalls   []bucketCall                 // every ListCheckBuckets call, for assertions
+}
+
+// bucketCall records the arguments of one ListCheckBuckets call.
+type bucketCall struct {
+	IDs           []uuid.UUID
+	From, To      time.Time
+	BucketSeconds int
 }
 
 // fakeCheck is a fakeStore fixture row carrying the fields
@@ -120,6 +129,21 @@ func (f *fakeStore) ListScheduledChecksBetween(_ context.Context, id uuid.UUID, 
 			CheckedAt: pgtype.Timestamptz{Time: c.CheckedAt, Valid: true},
 			Status:    status,
 		})
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListCheckBuckets(_ context.Context, ids []uuid.UUID, from, to time.Time, bucketSeconds int) ([]db.ListCheckBucketsRow, error) {
+	f.bucketCalls = append(f.bucketCalls, bucketCall{IDs: ids, From: from, To: to, BucketSeconds: bucketSeconds})
+	want := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []db.ListCheckBucketsRow
+	for _, r := range f.bucketRows {
+		if want[r.MonitorID] && !r.Bucket.Time.Before(from) && r.Bucket.Time.Before(to) {
+			out = append(out, r)
+		}
 	}
 	return out, nil
 }

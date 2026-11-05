@@ -35,6 +35,7 @@ type Store interface {
 	ListDailyStatsSince(ctx context.Context, id uuid.UUID, since time.Time) ([]db.DailyStat, error)
 	ListAllDailyStatsSince(ctx context.Context, since time.Time) ([]db.DailyStat, error)
 	ListScheduledChecksBetween(ctx context.Context, id uuid.UUID, from, to time.Time) ([]db.ListScheduledChecksBetweenRow, error)
+	ListCheckBuckets(ctx context.Context, ids []uuid.UUID, from, to time.Time, bucketSeconds int) ([]db.ListCheckBucketsRow, error)
 }
 
 // Scheduler is the subset of the scheduler the HTTP API needs to trigger
@@ -66,8 +67,9 @@ type api struct {
 	hub          *events.Hub
 	sseHeartbeat time.Duration
 	maxGap       time.Duration
-	commit       string // build identity, reported by /healthz
-	build        string // unique release id, reported by /healthz
+	commit       string           // build identity, reported by /healthz
+	build        string           // unique release id, reported by /healthz
+	now          func() time.Time // clock for time-window endpoints; a seam so tests can pin "now"
 }
 
 // New builds the API routes on a fresh http.ServeMux. bgCtx is used as the
@@ -97,12 +99,21 @@ func New(s Store, sched Scheduler, bgCtx context.Context, interval time.Duration
 		maxGap:       maxGap,
 		commit:       commit,
 		build:        build,
+		now:          time.Now,
 	}
+	return a.routes()
+}
 
+// routes registers every route on a fresh mux. It is separate from New so
+// tests can build an api with their own clock.
+func (a *api) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.handleHealthz)
 	mux.Handle("GET /api/monitors", a.requireToken(a.handleListMonitors))
 	mux.Handle("GET /api/events", a.requireToken(a.handleEvents))
+	// A literal segment wins over {id} in the mux, so "latency" is never
+	// parsed as a monitor id.
+	mux.Handle("GET /api/monitors/latency", a.requireToken(a.handleLatency))
 	mux.Handle("POST /api/monitors", a.requireToken(a.handleCreateMonitor))
 	mux.Handle("POST /api/monitors/check", a.requireToken(a.handleCheckAllMonitors))
 	mux.Handle("PATCH /api/monitors/{id}", a.requireToken(a.handleUpdateMonitor))

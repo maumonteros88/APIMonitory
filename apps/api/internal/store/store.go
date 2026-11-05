@@ -165,6 +165,19 @@ func (s *Store) ListScheduledChecksBetween(ctx context.Context, id uuid.UUID, fr
 	})
 }
 
+// ListCheckBuckets aggregates the scheduled checks of the given monitors in
+// [from, to) into buckets of bucketSeconds, aligned to the Unix epoch, in one
+// query. Only non-empty buckets come back; the caller fills the gaps. Manual
+// checks are excluded for the same reason as in ListScheduledChecksBetween.
+func (s *Store) ListCheckBuckets(ctx context.Context, ids []uuid.UUID, from, to time.Time, bucketSeconds int) ([]db.ListCheckBucketsRow, error) {
+	return s.queries.ListCheckBuckets(ctx, db.ListCheckBucketsParams{
+		BucketSeconds: int32(bucketSeconds),
+		MonitorIds:    ids,
+		FromAt:        pgtype.Timestamptz{Time: from, Valid: true},
+		ToAt:          pgtype.Timestamptz{Time: to, Valid: true},
+	})
+}
+
 // Attempt describes one completed probe attempt to persist.
 type Attempt struct {
 	MonitorID     uuid.UUID

@@ -42,6 +42,80 @@ func (q *Queries) InsertCheck(ctx context.Context, arg InsertCheckParams) error 
 	return err
 }
 
+const listCheckBuckets = `-- name: ListCheckBuckets :many
+select
+  monitor_id,
+  to_timestamp((floor(extract(epoch from checked_at))::bigint / $1::int::bigint) * $1::int::bigint)::timestamptz as bucket,
+  count(*)::int as checks,
+  count(*) filter (where success and latency_ms is not null)::int as ok_checks,
+  coalesce(sum(latency_ms) filter (where success), 0)::bigint as ok_latency_sum_ms,
+  coalesce(max(latency_ms) filter (where success), 0)::int as ok_latency_max_ms,
+  max(case status when 'down' then 3 when 'degraded' then 2 when 'up' then 1 else 0 end)::int as worst
+from checks
+where monitor_id = any($2::uuid[]) and scheduled
+  and checked_at >= $3 and checked_at < $4
+group by monitor_id, bucket
+order by monitor_id, bucket
+`
+
+type ListCheckBucketsParams struct {
+	BucketSeconds int32              `db:"bucket_seconds" json:"bucket_seconds"`
+	MonitorIds    []uuid.UUID        `db:"monitor_ids" json:"monitor_ids"`
+	FromAt        pgtype.Timestamptz `db:"from_at" json:"from_at"`
+	ToAt          pgtype.Timestamptz `db:"to_at" json:"to_at"`
+}
+
+type ListCheckBucketsRow struct {
+	MonitorID      uuid.UUID          `db:"monitor_id" json:"monitor_id"`
+	Bucket         pgtype.Timestamptz `db:"bucket" json:"bucket"`
+	Checks         int32              `db:"checks" json:"checks"`
+	OkChecks       int32              `db:"ok_checks" json:"ok_checks"`
+	OkLatencySumMs int64              `db:"ok_latency_sum_ms" json:"ok_latency_sum_ms"`
+	OkLatencyMaxMs int32              `db:"ok_latency_max_ms" json:"ok_latency_max_ms"`
+	Worst          int32              `db:"worst" json:"worst"`
+}
+
+// Aggregates scheduled checks into fixed-size time buckets aligned to the Unix
+// epoch, one row per non-empty (monitor, bucket). Latency is summed over the
+// successful checks together with their count (ok_checks) so the caller can
+// tell "no successful check" from a zero average without nullable aggregates.
+// worst ranks the status: down 3, degraded 2, up 1, anything else (pending or
+// a legacy NULL) 0. The bucket uses integer math on the epoch floored to whole
+// seconds (bucket sizes are whole seconds), so no float rounding at the
+// boundaries. date_bin is avoided on purpose: it needs Postgres 14.
+func (q *Queries) ListCheckBuckets(ctx context.Context, arg ListCheckBucketsParams) ([]ListCheckBucketsRow, error) {
+	rows, err := q.db.Query(ctx, listCheckBuckets,
+		arg.BucketSeconds,
+		arg.MonitorIds,
+		arg.FromAt,
+		arg.ToAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCheckBucketsRow
+	for rows.Next() {
+		var i ListCheckBucketsRow
+		if err := rows.Scan(
+			&i.MonitorID,
+			&i.Bucket,
+			&i.Checks,
+			&i.OkChecks,
+			&i.OkLatencySumMs,
+			&i.OkLatencyMaxMs,
+			&i.Worst,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listScheduledChecksBetween = `-- name: ListScheduledChecksBetween :many
 select checked_at, status from checks
 where monitor_id = $1 and scheduled
