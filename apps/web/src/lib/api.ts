@@ -33,7 +33,7 @@ export interface IncidentsResponse {
  * the same way (any 2xx response is up). */
 export type MonitorKind = 'front' | 'api';
 
-export type Environment = 'dev' | 'qa' | 'prod';
+export type Environment = 'dev' | 'qa' | 'prepro' | 'prod';
 
 export interface Monitor {
 	id: string;

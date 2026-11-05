@@ -45,8 +45,8 @@ function makeMonitor(
 const ids = (monitors: Monitor[]) => monitors.map((m) => m.id);
 
 describe('isEnvFilter', () => {
-	it('accepts the four filters and nothing else', () => {
-		for (const value of ['all', 'dev', 'qa', 'prod']) expect(isEnvFilter(value)).toBe(true);
+	it('accepts the five filters and nothing else', () => {
+		for (const value of ['all', 'dev', 'qa', 'prepro', 'prod']) expect(isEnvFilter(value)).toBe(true);
 		for (const value of ['Prod', 'staging', '', null, 1]) expect(isEnvFilter(value)).toBe(false);
 	});
 });
@@ -64,20 +64,22 @@ describe('filterByEnv and envCounts', () => {
 		makeMonitor('a', 'Pagos', 'api', 'prod'),
 		makeMonitor('b', 'Pagos', 'api', 'qa'),
 		makeMonitor('c', 'Backoffice', 'front', 'prod'),
-		makeMonitor('d', null, 'api', null)
+		makeMonitor('d', null, 'api', null),
+		makeMonitor('e', 'Pagos', 'front', 'prepro')
 	];
 
 	it('keeps every monitor under all, including those without an environment', () => {
-		expect(ids(filterByEnv(monitors, 'all'))).toEqual(['a', 'b', 'c', 'd']);
+		expect(ids(filterByEnv(monitors, 'all'))).toEqual(['a', 'b', 'c', 'd', 'e']);
 	});
 
 	it('keeps only that environment otherwise', () => {
 		expect(ids(filterByEnv(monitors, 'prod'))).toEqual(['a', 'c']);
+		expect(ids(filterByEnv(monitors, 'prepro'))).toEqual(['e']);
 		expect(ids(filterByEnv(monitors, 'dev'))).toEqual([]);
 	});
 
 	it('counts monitors per filter, with all counting everything', () => {
-		expect(envCounts(monitors)).toEqual({ all: 4, dev: 0, qa: 1, prod: 2 });
+		expect(envCounts(monitors)).toEqual({ all: 5, dev: 0, qa: 1, prepro: 1, prod: 2 });
 	});
 });
 
@@ -94,11 +96,12 @@ describe('groupByService', () => {
 		expect(groups.map((g) => g.service)).toEqual(['Ámbito', 'Backoffice', 'Ejemplo', 'Pagos', null]);
 	});
 
-	it('orders a service by environment (prod, qa, dev, none), then front before api, then name', () => {
+	it('orders a service by environment (prod, prepro, qa, dev, none), then front before api, then name', () => {
 		const [group] = groupByService([
 			makeMonitor('dev-api', 'Pagos', 'api', 'dev'),
 			makeMonitor('none-front', 'Pagos', 'front', null),
 			makeMonitor('qa-api', 'Pagos', 'api', 'qa'),
+			makeMonitor('prepro-api', 'Pagos', 'api', 'prepro'),
 			makeMonitor('prod-api-b', 'Pagos', 'api', 'prod'),
 			makeMonitor('prod-front', 'Pagos', 'front', 'prod'),
 			makeMonitor('prod-api-a', 'Pagos', 'api', 'prod'),
@@ -109,6 +112,7 @@ describe('groupByService', () => {
 			'prod-front',
 			'prod-api-a',
 			'prod-api-b',
+			'prepro-api',
 			'qa-api',
 			'dev-front',
 			'dev-api',
@@ -306,6 +310,7 @@ describe('buildBoard', () => {
 describe('buildMatrix', () => {
 	const monitors = [
 		makeMonitor('pagos-api-qa', 'Pagos', 'api', 'qa'),
+		makeMonitor('pagos-api-prepro', 'Pagos', 'api', 'prepro'),
 		makeMonitor('pagos-api-prod', 'Pagos', 'api', 'prod'),
 		makeMonitor('bo-front-dev', 'Backoffice', 'front', 'dev'),
 		makeMonitor('bo-api-dev', 'Backoffice', 'api', 'dev'),
@@ -315,13 +320,13 @@ describe('buildMatrix', () => {
 		makeMonitor('nothing', null, 'front', null)
 	];
 
-	it('makes one row per service, alphabetically, with dev / qa / prod cells', () => {
+	it('makes one row per service, alphabetically, with dev / qa / prepro / prod cells', () => {
 		const { rows } = buildMatrix(monitors);
 
 		expect(rows.map((r) => r.service)).toEqual(['Backoffice', 'Pagos']);
 		expect(rows.map((r) => r.cells.map((c) => c.env))).toEqual([
-			['dev', 'qa', 'prod'],
-			['dev', 'qa', 'prod']
+			['dev', 'qa', 'prepro', 'prod'],
+			['dev', 'qa', 'prepro', 'prod']
 		]);
 	});
 
@@ -330,9 +335,9 @@ describe('buildMatrix', () => {
 		const cellIds = (row: typeof backoffice) => row.cells.map((c) => c.segments.map((s) => s.monitor?.id ?? null));
 
 		expect(backoffice.meta).toBe('Front y API');
-		expect(cellIds(backoffice)).toEqual([['bo-front-dev', 'bo-api-dev'], [], ['bo-front-prod', null]]);
+		expect(cellIds(backoffice)).toEqual([['bo-front-dev', 'bo-api-dev'], [], [], ['bo-front-prod', null]]);
 		expect(pagos.meta).toBe('Solo API');
-		expect(cellIds(pagos)).toEqual([[], [null, 'pagos-api-qa'], [null, 'pagos-api-prod']]);
+		expect(cellIds(pagos)).toEqual([[], [null, 'pagos-api-qa'], [null, 'pagos-api-prepro'], [null, 'pagos-api-prod']]);
 	});
 
 	it('sets aside monitors missing a service or an environment, in list order', () => {

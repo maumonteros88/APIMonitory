@@ -149,7 +149,7 @@
 	{:else if matrix}
 		{#if matrix.rows.length > 0}
 			<div class="matrix-scroll">
-				<div class="matrix">
+				<div class="matrix" style:--env-cols={MATRIX_ENVS.length}>
 					<div class="matrix-row matrix-head">
 						<span>Servicio</span>
 						{#each MATRIX_ENVS as column (column)}
@@ -391,13 +391,13 @@
 	}
 
 	.matrix {
-		min-width: 640px;
+		min-width: 800px;
 		padding: 0 16px;
 	}
 
 	.matrix-row {
 		display: grid;
-		grid-template-columns: 168px repeat(3, minmax(0, 1fr));
+		grid-template-columns: 168px repeat(var(--env-cols), minmax(0, 1fr));
 		gap: 8px;
 		padding: 12px 0;
 		align-items: stretch;

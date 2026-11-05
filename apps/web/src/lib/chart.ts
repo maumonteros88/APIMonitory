@@ -147,7 +147,7 @@ export interface ChartGroup {
 }
 
 /** One group per service (alphabetical, "Sin servicio" last) and one card per
- * environment inside it: prod, qa, dev, then the monitors without one. */
+ * environment inside it: prod, prepro, qa, dev, then the monitors without one. */
 export function buildChartGroups(monitors: Monitor[]): ChartGroup[] {
 	return groupByService(monitors).map((group) => {
 		const cards: ChartCard[] = [];

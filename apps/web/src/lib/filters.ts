@@ -150,7 +150,7 @@ export interface OutsideItem {
 	id: string;
 	/** "{service} · Front|API", or the monitor's name when it has no service. */
 	label: string;
-	/** " · Dev|QA|Prod" whenever the monitor has an environment: the filter
+	/** " · Dev|QA|Prepro|Prod" whenever the monitor has an environment: the filter
 	 * that hid it may be the environment itself. */
 	env: string;
 	status: 'down' | 'degraded';

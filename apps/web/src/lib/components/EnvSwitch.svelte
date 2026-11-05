@@ -72,21 +72,42 @@
 		font-weight: 400;
 	}
 
+	/* Five options with their counts don't fit side by side in the 264px
+	   rail or on a 320px phone, so there each count goes under its label:
+	   the width then follows the labels and stays put as counts grow. */
+	.fill {
+		height: 48px;
+	}
+
 	.fill .env-option {
 		flex: 1;
-		padding: 0;
-		gap: 4px;
+		flex-direction: column;
+		padding: 0 4px;
+		gap: 0;
 		font-size: 13px;
+		line-height: 1.2;
 	}
 
 	.fill .env-count {
 		font-size: 11px;
 	}
 
-	/* Keeps the four options within a 320px phone without page scroll. */
-	@media (max-width: 400px) {
+	@media (max-width: 480px) {
+		.env-switch {
+			height: 48px;
+		}
+
 		.env-option {
-			padding: 0 8px;
+			flex: 1;
+			flex-direction: column;
+			padding: 0 6px;
+			gap: 0;
+			font-size: 13px;
+			line-height: 1.2;
+		}
+
+		.env-count {
+			font-size: 11px;
 		}
 	}
 </style>

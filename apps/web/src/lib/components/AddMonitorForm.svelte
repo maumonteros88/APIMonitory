@@ -42,6 +42,7 @@
 		{ value: null, label: 'Sin asignar' },
 		{ value: 'dev', label: 'Dev' },
 		{ value: 'qa', label: 'QA' },
+		{ value: 'prepro', label: 'Prepro' },
 		{ value: 'prod', label: 'Prod' }
 	];
 

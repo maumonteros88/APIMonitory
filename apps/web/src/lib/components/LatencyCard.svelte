@@ -347,6 +347,11 @@
 		color: var(--fg-1);
 	}
 
+	.env-prepro {
+		border-color: var(--fg-2);
+		color: var(--fg-1);
+	}
+
 	.env-dev {
 		border-style: dashed;
 		border-color: var(--fg-3);

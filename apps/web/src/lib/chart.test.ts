@@ -80,6 +80,7 @@ describe('buildChartGroups', () => {
 		makeMonitor('pagos-api-prod', 'Pagos', 'api', 'prod', 'down'),
 		makeMonitor('pagos-front-prod', 'Pagos', 'front', 'prod'),
 		makeMonitor('pagos-api-qa', 'Pagos', 'api', 'qa'),
+		makeMonitor('pagos-api-prepro', 'Pagos', 'api', 'prepro'),
 		makeMonitor('pagos-api-none', 'Pagos', 'api', null),
 		makeMonitor('bo-front-prod', 'Backoffice', 'front', 'prod', 'degraded'),
 		makeMonitor('loose-api', null, 'api', null)
@@ -89,10 +90,10 @@ describe('buildChartGroups', () => {
 		expect(buildChartGroups(monitors).map((g) => g.service)).toEqual(['Backoffice', 'Pagos', null]);
 	});
 
-	it('orders a service cards prod, qa, dev, then no environment', () => {
+	it('orders a service cards prod, prepro, qa, dev, then no environment', () => {
 		const pagos = buildChartGroups(monitors).find((g) => g.service === 'Pagos')!;
-		expect(pagos.cards.map((c) => c.environment)).toEqual(['prod', 'qa', 'dev', null]);
-		expect(pagos.cards.map((c) => c.key)).toEqual(['Pagos|prod', 'Pagos|qa', 'Pagos|dev', 'Pagos|']);
+		expect(pagos.cards.map((c) => c.environment)).toEqual(['prod', 'prepro', 'qa', 'dev', null]);
+		expect(pagos.cards.map((c) => c.key)).toEqual(['Pagos|prod', 'Pagos|prepro', 'Pagos|qa', 'Pagos|dev', 'Pagos|']);
 	});
 
 	it('puts the front before the API inside a card', () => {

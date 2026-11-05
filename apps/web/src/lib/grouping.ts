@@ -3,14 +3,14 @@ import type { Environment, Monitor, MonitorKind } from './api';
 /** The dashboard's environment filter: one environment, or every monitor. */
 export type EnvFilter = 'all' | Environment;
 
-export const ENV_FILTERS: EnvFilter[] = ['all', 'dev', 'qa', 'prod'];
+export const ENV_FILTERS: EnvFilter[] = ['all', 'dev', 'qa', 'prepro', 'prod'];
 
-export const ENV_LABELS: Record<Environment, string> = { dev: 'Dev', qa: 'QA', prod: 'Prod' };
+export const ENV_LABELS: Record<Environment, string> = { dev: 'Dev', qa: 'QA', prepro: 'Prepro', prod: 'Prod' };
 
 export const KIND_LABELS: Record<MonitorKind, string> = { front: 'Front', api: 'API' };
 
 /** Board matrix columns, left to right. */
-export const MATRIX_ENVS: Environment[] = ['dev', 'qa', 'prod'];
+export const MATRIX_ENVS: Environment[] = ['dev', 'qa', 'prepro', 'prod'];
 
 export function isEnvFilter(value: unknown): value is EnvFilter {
 	return typeof value === 'string' && (ENV_FILTERS as string[]).includes(value);
@@ -27,24 +27,24 @@ export function filterByEnv(monitors: Monitor[], env: EnvFilter): Monitor[] {
 }
 
 export function envCounts(monitors: Monitor[]): Record<EnvFilter, number> {
-	const counts: Record<EnvFilter, number> = { all: monitors.length, dev: 0, qa: 0, prod: 0 };
+	const counts: Record<EnvFilter, number> = { all: monitors.length, dev: 0, qa: 0, prepro: 0, prod: 0 };
 	for (const m of monitors) {
 		if (m.environment) counts[m.environment]++;
 	}
 	return counts;
 }
 
-const ENV_RANK: Record<Environment, number> = { prod: 0, qa: 1, dev: 2 };
+const ENV_RANK: Record<Environment, number> = { prod: 0, prepro: 1, qa: 2, dev: 3 };
 
 function envRank(m: Monitor): number {
-	return m.environment ? ENV_RANK[m.environment] : 3;
+	return m.environment ? ENV_RANK[m.environment] : 4;
 }
 
 function compareNames(a: string, b: string): number {
 	return a.localeCompare(b, 'es');
 }
 
-/** Order of monitors inside a service: prod, qa, dev, then no environment;
+/** Order of monitors inside a service: prod, prepro, qa, dev, then no environment;
  * fronts before APIs within an environment; then by name. */
 export function compareMonitors(a: Monitor, b: Monitor): number {
 	const byEnv = envRank(a) - envRank(b);
@@ -105,7 +105,7 @@ export interface AlertItem {
 	id: string;
 	/** "{service} · Front|API", or the monitor's name when it has no service. */
 	label: string;
-	/** " · Dev|QA|Prod" under the 'all' filter, "" otherwise. */
+	/** " · Dev|QA|Prepro|Prod" under the 'all' filter, "" otherwise. */
 	env: string;
 	/** The monitor's service, so a chip can focus the view on it. */
 	service: string | null;
