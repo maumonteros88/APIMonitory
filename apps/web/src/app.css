@@ -259,6 +259,12 @@ pre,
 	--m-sub-tx: #5f6a74;
 	--m-bad-ink: #c4321c;
 	--m-warn-ink: #806000;
+	/* Latency chart lines, one hue per monitor kind, checked with the
+	   data-viz palette validator against each theme's surface. Not orange,
+	   green or yellow: those already mean status here. The light API
+	   magenta is under 3:1, so lines always carry a text label too. */
+	--m-series-front: #2a78d6;
+	--m-series-api: #e87ba4;
 }
 
 html[data-theme='dark'] {
@@ -284,6 +290,8 @@ html[data-theme='dark'] {
 	--m-sub-tx: #a3adb6;
 	--m-bad-ink: #ff8a76;
 	--m-warn-ink: #ffd84d;
+	--m-series-front: #3987e5;
+	--m-series-api: #d55181;
 }
 
 body {

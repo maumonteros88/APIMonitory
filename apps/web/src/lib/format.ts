@@ -7,7 +7,7 @@ export interface StatusMeta {
 	textColor: string;
 }
 
-const MONTHS_ES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+export const MONTHS_ES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
 /** Parses a "YYYY-MM-DD" calendar date as local time, avoiding the UTC-shift
  * that `new Date(dateStr)` would introduce for date-only strings. */

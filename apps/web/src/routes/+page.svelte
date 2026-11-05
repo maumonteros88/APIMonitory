@@ -43,6 +43,7 @@
 	import { DEFAULT_PERIOD, applyPeriod, parsePeriod, type Period } from '$lib/period';
 	import { VIEW_OPTIONS, isView, type View } from '$lib/views';
 	import AddMonitorForm from '$lib/components/AddMonitorForm.svelte';
+	import ChartView from '$lib/components/ChartView.svelte';
 	import FilterBar from '$lib/components/FilterBar.svelte';
 	import FilterRail from '$lib/components/FilterRail.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -94,6 +95,8 @@
 	// Ticks independently of any network activity (poll or SSE), purely so
 	// connectionSub's "hace X" wording doesn't look frozen between polls.
 	let now = $state(Date.now());
+	// The chart view refreshes its own data only while this is true.
+	let tabVisible = $state(true);
 
 	// A poll failure only matters if it's the most recent attempt: a
 	// success after a failure clears it without needing to reset
@@ -377,6 +380,7 @@
 	const HIDDEN_TEARDOWN_MS = 90000;
 
 	function handleVisibilityChange() {
+		tabVisible = document.visibilityState === 'visible';
 		if (document.visibilityState === 'hidden') {
 			if (hiddenTeardownHandle) clearTimeout(hiddenTeardownHandle);
 			hiddenTeardownHandle = setTimeout(stopEvents, HIDDEN_TEARDOWN_MS);
@@ -526,6 +530,7 @@
 			// environment and service, and 90 days for this tab.
 		}
 		const unsubscribe = onUnauthorized(handleUnauthorized);
+		tabVisible = document.visibilityState === 'visible';
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		nowTickHandle = setInterval(() => {
 			now = Date.now();
@@ -678,6 +683,8 @@
 							</div>
 						</div>
 					</section>
+				{:else if hasLoadedOnce && view === 'chart'}
+					<ChartView monitors={visibleMonitors} {tabVisible} />
 				{:else if hasLoadedOnce && view === 'board'}
 					<MonitorBoard
 						monitors={periodMonitors}
@@ -846,7 +853,7 @@
 		color: var(--m-surface);
 	}
 
-	/* Keeps the view switch within a 320px phone without page scroll. */
+	/* Keeps the three views within a 320px phone without page scroll. */
 	@media (max-width: 400px) {
 		.view-option {
 			padding: 0 8px;

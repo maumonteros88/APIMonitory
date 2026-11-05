@@ -283,6 +283,47 @@ export function checkAllMonitors(): Promise<void> {
 	return request<void>('/api/monitors/check', { method: 'POST' });
 }
 
+/** The windows GET /api/monitors/latency accepts. */
+export type LatencyRange = '24h' | '7d' | '30d';
+
+/** A bucket's worst check status; 'none' when it has no finished check. */
+export type LatencyStatus = 'up' | 'degraded' | 'down' | 'none';
+
+/** One time bucket. avgMs and maxMs only cover successful checks, so they
+ * are null both for an empty bucket (checks 0) and for one where every
+ * check failed. */
+export interface LatencyPoint {
+	at: string;
+	avgMs: number | null;
+	maxMs: number | null;
+	checks: number;
+	status: LatencyStatus;
+}
+
+export interface MonitorLatency {
+	id: string;
+	/** Exactly one point per bucket, oldest first, empty buckets included. */
+	points: LatencyPoint[];
+}
+
+export interface LatencyResponse {
+	range: LatencyRange;
+	bucketMinutes: number;
+	from: string;
+	to: string;
+	/** In monitor creation order, not in the order of the requested ids, and
+	 * without the ids the server does not know: always look them up by id. */
+	monitors: MonitorLatency[];
+}
+
+/** Latency and status per time bucket for the given monitors. An empty ids
+ * list asks for every monitor (the server's default). */
+export function fetchLatency(range: LatencyRange, ids: string[], signal?: AbortSignal): Promise<LatencyResponse> {
+	const params = new URLSearchParams({ range });
+	if (ids.length > 0) params.set('ids', ids.join(','));
+	return request<LatencyResponse>(`/api/monitors/latency?${params}`, { signal });
+}
+
 export function fetchIncidents(id: string, day: string): Promise<IncidentsResponse> {
 	return request<IncidentsResponse>(`/api/monitors/${id}/incidents?day=${day}`);
 }
