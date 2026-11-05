@@ -2,6 +2,12 @@
 /apps/api/tmp/
 *.test
 
+# Cross-compiled artifacts (make build-windows / release-windows)
+/build/
+
+# Deploy settings (copy deploy/deploy.env.example)
+/deploy/deploy.env
+
 # Node / SvelteKit
 node_modules/
 .svelte-kit/
@@ -12,6 +18,9 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Local tooling cache
+.atl/
 
 # OS
 .DS_Store
