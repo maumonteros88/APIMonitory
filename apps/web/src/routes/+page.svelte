@@ -53,6 +53,7 @@
 	import MonitorBoard from '$lib/components/MonitorBoard.svelte';
 	import MonitorList from '$lib/components/MonitorList.svelte';
 	import StatusBanner from '$lib/components/StatusBanner.svelte';
+	import StatusLegend from '$lib/components/StatusLegend.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import TokenGate from '$lib/components/TokenGate.svelte';
 
@@ -639,6 +640,8 @@
 				</button>
 			</div>
 		</header>
+
+		<StatusLegend />
 
 		<div class="layout" class:with-rail={wideLayout.current}>
 			{#if wideLayout.current}
